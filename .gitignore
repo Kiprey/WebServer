@@ -1,2 +1,6 @@
+# 生成的可执行文件
 WebServer
+# 生成的中间文件
 *.o
+# vscode 配置文件
+.vscode/
