@@ -4,3 +4,5 @@ WebServer
 *.o
 # vscode 配置文件
 .vscode/
+# gdb 调试相关 { 是的直接手搓gdb调试 :) }
+.gdb_history

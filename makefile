@@ -1,10 +1,11 @@
 SOURCE  := $(wildcard *.cpp)
+INCLUDE := 
 OBJS    := $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
 
 TARGET  := WebServer
 CC      := g++
 LIBS    := -lpthread
-CFLAGS  := -std=c++11 -g -Wall -O3 $(INCLUDE)
+CFLAGS  := -std=c++11 -g -Wall -O0 $(INCLUDE)
 CXXFLAGS:= $(CFLAGS)
 
 .PHONY : objs clean veryclean rebuild all
