@@ -34,7 +34,8 @@ public:
      * @brief   将当前task加入至线程池中
      * @param   task 待处理的 task
      * @return  返回添加结果, true 表示添加成功, false 表示队列已满, 添加失败
-     * @note    这里的 arguments 指针指向的对象,将在子线程内部事件执行完成后自动释放(因为调用者很难去释放) 
+     * @note    这里的 arguments 指针指向的对象,将 **不会** 在子线程内部事件执行完成后自动释放
+     *          也就是说,外部调用者需要自己考虑到内存释放
      */ 
     bool appendTask(void (*function)(void*), void* arguments);
 
