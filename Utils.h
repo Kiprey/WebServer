@@ -20,4 +20,22 @@ std::ostream& logmsg(int flag);
  */
 int socket_bind_and_listen(int port);
 
+/**
+ * @brief   read的多线程版本
+ * @param   fd  源文件描述符
+ * @param   buf 缓冲区地址
+ * @param   len 目标读取的字节个数
+ * @return  成功读取的长度
+ */
+ssize_t readn(int fd, void*buf, size_t len);
+
+/**
+ * @brief   write的多线程版本
+ * @param   fd  源文件描述符
+ * @param   buf 缓冲区地址
+ * @param   len 目标读取的字节个数
+ * @return  成功读取的长度
+ */
+ssize_t writen(int fd, void*buf, size_t len);
+
 #endif

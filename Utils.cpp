@@ -52,3 +52,61 @@ int socket_bind_and_listen(int port)
 
     return listen_fd;
 }
+
+ssize_t readn(int fd, void*buf, size_t len)
+{
+    // 这里将 void* 转换成 char* 是为了在下面进行自增操作
+    char *pos = (char*)buf;
+    size_t leftNum = len;
+    ssize_t readNum = 0;
+    while(leftNum > 0)
+    {
+        ssize_t tmpRead = 0;
+        // 尝试循环读取,如果报错,则进行判断
+        // 注意, read 的返回值为0则表示读取到 EOF,是正常现象
+        if((tmpRead = read(fd, pos, leftNum)) < 0)
+        {
+            if(errno == EINTR)
+                tmpRead = 0;
+            // 如果始终读取不到数据,则提前返回,因为这个取决于远程 fd,无法预测要等多久
+            else if (errno == EAGAIN)
+                return readNum;
+            else
+                return -1;
+        }
+        if(tmpRead == 0)
+            break;
+        readNum += tmpRead;
+        pos += tmpRead;
+        leftNum -= tmpRead;
+    }
+    return readNum;
+}
+
+ssize_t writen(int fd, void*buf, size_t len)
+{
+    // 这里将 void* 转换成 char* 是为了在下面进行自增操作
+    char *pos = (char*)buf;
+    size_t leftNum = len;
+    ssize_t writtenNum = 0;
+    while(leftNum > 0)
+    {
+        ssize_t tmpWrite = 0;
+        // 尝试循环写入,如果报错,则进行判断
+        // 注意,write返回0属于异常现象,因此判断时需要包含
+        if((tmpWrite = write(fd, pos, leftNum)) <= 0)
+        {
+            // 与read不同的是,如果 EAGAIN,则继续重复写入,因为写入操作是有Server这边决定的
+            if(errno == EINTR || errno == EAGAIN)
+                tmpWrite = 0;
+            else
+                return -1;
+        }
+        if(tmpWrite == 0)
+            break;
+        writtenNum += tmpWrite;
+        pos += tmpWrite;
+        leftNum -= tmpWrite;
+    }
+    return writtenNum;
+}
