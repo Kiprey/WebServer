@@ -73,7 +73,6 @@ bool HttpHandler::readRequest()
                 break;
             // 否则设置为阻塞状态,继续进行读取操作
             // TODO 这里需要换种更好的方式来实现
-            break;
         }
         // LOG(INFO) << "Read data: " << buffer << endl;
 
