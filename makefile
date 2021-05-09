@@ -5,7 +5,7 @@ OBJS    := $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
 TARGET  := WebServer
 CC      := g++
 LIBS    := -lpthread
-CFLAGS  := -std=c++11 -g -Wall -O0 $(INCLUDE)
+CFLAGS  := -std=c++11 -g3 -ggdb3 -Wall -O0 $(INCLUDE)
 CXXFLAGS:= $(CFLAGS)
 
 .PHONY : objs clean veryclean rebuild all

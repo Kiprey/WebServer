@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <cassert>
+#include <cctype>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sstream>
@@ -91,7 +92,8 @@ size_t HttpHandler::parseURI()
     assert(pos2 != string::npos);
 
     // 获取path时,注意去除 path 中的第一个斜杠
-    path_ = first_line.substr(pos1 + 1, pos2 - pos1);
+    pos1++;
+    path_ = first_line.substr(pos1, pos2 - pos1);
     // 如果 path 为空,则添加一个 . 表示当前文件夹
     if(path_.length() == 0)
         path_ += ".";
@@ -142,12 +144,39 @@ size_t HttpHandler::parseHttpHeader(size_t start_pos)
     return pos1 + 2;
 }
 
+string HttpHandler::escapeStr(const string& str)
+{
+    string msg = str;
+    // 遍历所有字符
+    for(size_t i = 0; i < msg.length(); i++)
+    {
+        char ch = msg[i];
+        if(iscntrl(ch))
+        {
+            // 这里只对\r\n做特殊处理
+            string substr;
+            if(ch == '\r')
+                substr = "\\r";
+            else if(ch == '\n')
+                substr = "\\n";
+            else
+            {
+                char hex[10];
+                sprintf(hex, "\\x%02x", ch);
+                substr = hex;
+            }
+            msg.replace(i, 1, substr);
+        }
+    }
+    return msg;
+}
+
 bool HttpHandler::sendResponse(const string& responseCode, const string& responseMsg, 
                             const string& responseBodyType, const string& responseBody)
 {
     stringstream sstream;
     sstream << "HTTP/1.1" << " " << responseCode << " " << responseMsg << "\r\n";
-    // 由于我们的目标是无连接状态,因此带一个 ConnectionClose标志
+    // 由于我们暂时实现的是无连接状态,因此带一个 ConnectionClose标志
     sstream << "Connection: close" << "\r\n";
     sstream << "Server: WebServer/1.0" << "\r\n";
     sstream << "Content-length: " << responseBody.size() << "\r\n";
@@ -157,6 +186,8 @@ bool HttpHandler::sendResponse(const string& responseCode, const string& respons
 
     string&& response = sstream.str();
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
+    LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
+    LOG(INFO) << escapeStr(response) << endl;
     return len >= 0 && static_cast<size_t>(len) != response.size();
 }
 
@@ -179,6 +210,8 @@ void HttpHandler::RunEventLoop()
 
     // 输出连接
     printConnectionStatus();
+
+    LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
     // 从socket读取请求数据
     readRequest();
 
@@ -189,7 +222,9 @@ void HttpHandler::RunEventLoop()
     // 2. 解析每一条http header
     pos = parseHttpHeader(pos);
     // 3. 输出剩余的 HTTP body
-    LOG(INFO) << "HTTP Body: [" << request_.substr(pos) << "]" << endl;
+    LOG(INFO) << "HTTP Body: [" 
+              << request_.substr(pos, request_.length() - pos) 
+              << "]" << endl;
 
     // 发送目标数据 ------------------------------------------
 
@@ -205,7 +240,7 @@ void HttpHandler::RunEventLoop()
     {
         // 获取目标文件的大小
         struct stat st;
-        if(!stat(path_.c_str(), &st))
+        if(stat(path_.c_str(), &st) == -1)
         {
             LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << endl;
             return;
@@ -232,6 +267,6 @@ void HttpHandler::RunEventLoop()
             suffix = suffix.substr(dot_pos + 1);
 
         // 发送数据
-        sendResponse("200", "OK", responseBody, MimeType::getMineType(suffix));
+        sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
 }
