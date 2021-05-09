@@ -144,7 +144,7 @@ size_t HttpHandler::parseHttpHeader(size_t start_pos)
     return pos1 + 2;
 }
 
-string HttpHandler::escapeStr(const string& str)
+void HttpHandler::printStr(const string& str)
 {
     string msg = str;
     // 遍历所有字符
@@ -168,7 +168,12 @@ string HttpHandler::escapeStr(const string& str)
             msg.replace(i, 1, substr);
         }
     }
-    return msg;
+    // 将读取到的数据输出
+    if(msg.length() > MAXBUF)
+        LOG(INFO) << "{ " << msg.substr(0, MAXBUF) << " ... ... " << " }" << endl;
+    else
+        LOG(INFO) << "{ " << msg << " }" << endl;
+
 }
 
 bool HttpHandler::sendResponse(const string& responseCode, const string& responseMsg, 
@@ -186,8 +191,11 @@ bool HttpHandler::sendResponse(const string& responseCode, const string& respons
 
     string&& response = sstream.str();
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
+
+    // 输出返回的数据
     LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
-    LOG(INFO) << escapeStr(response) << endl;
+    printStr(response);
+
     return len >= 0 && static_cast<size_t>(len) != response.size();
 }
 
@@ -211,11 +219,13 @@ void HttpHandler::RunEventLoop()
     // 输出连接
     printConnectionStatus();
 
-    LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
+    LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
     // 从socket读取请求数据
     readRequest();
-
+    printStr(request_);
+    
     // 解析信息 ------------------------------------------
+    LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
     size_t pos;
     // 1. 先解析第一行
     pos = parseURI();

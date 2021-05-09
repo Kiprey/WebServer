@@ -9,7 +9,7 @@ using namespace std;
 class HttpHandler
 {
 private:
-    const int MAXBUF = 1024;
+    const size_t MAXBUF = 1024;
 
     int client_fd_;
     // http 请求包的所有数据
@@ -67,11 +67,11 @@ private:
     bool handleError(const string& errCode, const string& errMsg);
 
     /**
-     * @brief 将传入的字符串转义成终端可以直接读取的输出
+     * @brief 将传入的字符串转义成终端可以直接显示的输出,并输出至终端
      * @param str 待输出的字符串
      * @note  是将 '\r' 等无法在终端上显示的字符,转义成 "\r"字符串 输出
      */
-    string escapeStr (const string& str);
+    void printStr (const string& str);
 
 public:
     /**
