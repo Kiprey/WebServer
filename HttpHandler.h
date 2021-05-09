@@ -31,8 +31,10 @@ private:
 
     /**
      * @brief 从client_fd_中读取数据至 request_中
+     * @return true 表示读取成功,false表示读取过程存在错误
+     * @note 内部函数recvn在错误时会产生 errno
      */
-    void readRequest();
+    bool readRequest();
 
     /**
      * @brief 从0位置处解析 请求方式\URI\HTTP版本等

@@ -1,6 +1,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
@@ -74,6 +75,14 @@ bool setSocketNoBlock(int fd)
     return true;
 }
 
+bool setSocketNoDelay(int fd)
+{
+    int enable = 1;
+    if(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&enable, sizeof(enable)) == -1)
+        return false;
+    return true;
+}
+
 ssize_t readn(int fd, void*buf, size_t len)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
@@ -130,4 +139,14 @@ ssize_t writen(int fd, void*buf, size_t len)
         leftNum -= tmpWrite;
     }
     return writtenNum;
+}
+
+void handleSigpipe()
+{
+    struct sigaction sa;
+    memset(&sa, '\0', sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sa.sa_flags = 0;
+    if(sigaction(SIGPIPE, &sa, NULL) == -1)
+        LOG(ERROR) << "Ignore SIGPIPE failed! " << strerror(errno) << std::endl;
 }

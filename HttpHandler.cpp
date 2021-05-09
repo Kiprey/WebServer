@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <cassert>
+#include <cstring>
 #include <cctype>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -33,37 +34,54 @@ void HttpHandler::printConnectionStatus()
         && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
         LOG(INFO) << "(socket: " << client_fd_ << ")" << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
               << " <---> [Client] " << inet_ntoa(peerAddr.sin_addr) << ":" << ntohs(peerAddr.sin_port) << endl;
+    else
+        LOG(ERROR) << "printConnectionStatus failed ! " << strerror(errno) << endl;
 }
 
-void HttpHandler::readRequest()
+bool HttpHandler::readRequest()
 {
     // 清除之前的数据
     request_.clear();
     char buffer[MAXBUF];
-    // 设置 read 非阻塞读取. 注意套接字仍然是阻塞的,这是为了阻塞 accept 函数
-    if(!setSocketNoBlock(client_fd_))
-    {
-        LOG(ERROR) << "Can not set socket " << client_fd_ << " No Block ! " << endl;
-        return;
-    }
+    
     // 循环非阻塞读取 ------------------------------------------
     for(;;)
     {
+        /**
+         * 注意,read函数在阻塞状态下,根据我的观察,不管有没有读取到数据,除非远程直接关闭连接,否则 read 函数将不会返回
+         * 而 read 函数在非阻塞状态下时,若有数据就直接读取,没有数据就返回 EAGAIN
+         * 
+         * 我的目的是:read函数调用时,若有数据就直接读取返回,若没有读取则阻塞.
+         */ 
         int len = readn(client_fd_, buffer, MAXBUF);
         if(len < 0)
         {
-            LOG(ERROR) << "读取request异常" << endl;
-            return;
+            // LOG(ERROR) << "读取request异常, " << strerror(errno) << endl;
+            return false;
         }
-        // 如果已经全部读取完成
+        /** 
+         * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
+         * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
+         * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
+         * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
+         */
         else if(len == 0)
+        {
+            // 对于已经读取完所有数据的这种情况
+            if(request_.length() > 0)
+                // 直接停止读取
+                break;
+            // 否则设置为阻塞状态,继续进行读取操作
+            // TODO 这里需要换种更好的方式来实现
             break;
+        }
         // LOG(INFO) << "Read data: " << buffer << endl;
 
         // 将读取到的数据组装起来
         string request(buffer, buffer + len);
         request_ += request;
     }
+    return true;
 }
 
 size_t HttpHandler::parseURI()
@@ -223,8 +241,12 @@ void HttpHandler::RunEventLoop()
     printConnectionStatus();
 
     LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
-    // 从socket读取请求数据
-    readRequest();
+    // 从socket读取请求数据, 如果读取失败
+    if(!readRequest())
+    {
+        LOG(INFO) << "Read request failed ! " << strerror(errno) << endl;
+        return;
+    }
     printStr(request_);
     
     // 解析信息 ------------------------------------------
@@ -246,7 +268,7 @@ void HttpHandler::RunEventLoop()
     if((file_fd = open(path_.c_str(), O_RDONLY, 0)) == -1)
     {
         // 如果打开失败,则返回404
-        LOG(ERROR) << "File [" << path_ << "] open failed ! ErrorCode: " << errno << endl;
+        LOG(ERROR) << "File [" << path_ << "] open failed ! " << strerror(errno) << endl;
         handleError("404", "Not Found");
     }  
     else
@@ -261,7 +283,7 @@ void HttpHandler::RunEventLoop()
         // 读取文件, 使用 mmap 来高速读取文件
         void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
         // 记得关闭文件描述符
-        close(file_fd);
+        close(file_fd); 
         // 异常处理
         if(addr == MAP_FAILED)
         {
@@ -271,7 +293,10 @@ void HttpHandler::RunEventLoop()
         // 将数据从内存页存入至 responseBody
         char* file_data_ptr = static_cast<char*>(addr);
         string responseBody(file_data_ptr, file_data_ptr + st.st_size);
-
+        // 记得删除内存
+        int res = munmap(addr, st.st_size);
+        if(res == -1)
+            LOG(ERROR) << "Can not unmap file [" << path_ << "] <-> mem ! " << endl;
         // 获取 Content-type
         string suffix = path_;
         // 通过循环找到最后一个 dot

@@ -2,6 +2,8 @@
 #define UTILS_H
 
 #include <iostream>
+#include <cstring>
+#include <csignal>
 
 /**
  * @brief   输出信息相关宏定义与函数
@@ -25,25 +27,43 @@ int socket_bind_and_listen(int port);
  * @brief 设置传入的socket为非阻塞模式
  * @param fd 传入的目标套接字
  * @return true表示设置成功, false表示设置失败
+ * @note   fcntl函数在错误时会生成 errno
  */
 bool setSocketNoBlock(int fd);
 
 /**
- * @brief   read的多线程版本
+ * @brief 设置socket禁用 nagle算法
+ * @param fd 目标套接字
+ * @return true 表示设置成功, false 表示设置失败
+ * @note   setsockopt函数在错误时会生成 errno
+ */
+bool setSocketNoDelay(int fd);
+
+/**
+ * @brief   read的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
  * @return  成功读取的长度
+ * @note    内部函数在错误时会生成 errno
  */
 ssize_t readn(int fd, void*buf, size_t len);
 
 /**
- * @brief   write的多线程版本
+ * @brief   write的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
  * @return  成功读取的长度
+ * @note    内部函数在错误时会生成 errno
  */
 ssize_t writen(int fd, void*buf, size_t len);
+
+/**
+ * @brief 忽略 SIGPIPE信号
+ * @note  当远程主机强迫关闭socket时,Server端会产生 SIGPIPE 信号
+ *        但SIGPIPE信号默认关闭当前进程,因此在Server端处需要忽略该信号
+ */
+void handleSigpipe();
 
 #endif

@@ -35,6 +35,9 @@ int main(int argc, char* argv[])
     }
     int port = atoi(argv[1]);
 
+    // 忽略 SIGPIPE 信号
+    handleSigpipe();
+
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)
     {
@@ -55,6 +58,23 @@ int main(int argc, char* argv[])
             // 直接跳过
             continue;
         }
+
+        // 设置 read 非阻塞读取. 注意套接字仍然是阻塞的,这是为了阻塞 accept 函数
+        if(!setSocketNoBlock(client_fd))
+        {
+            LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
+                       << strerror(errno) << endl;
+            continue;
+        }
+        
+        // 禁用延迟读写
+        // if(!setSocketNoDelay(client_fd))
+        // {
+        //     LOG(ERROR) << "Can not set socket " << client_fd << " No Delay ! "
+        //                << strerror(errno) << endl;
+        //     continue;
+        // }
+
         // 将其放入线程池中并行执行
         int* curr_fd_ptr = new int(client_fd);
         thread_pool.appendTask(handlerConnect, curr_fd_ptr);
