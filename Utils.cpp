@@ -3,20 +3,28 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
+#include "MutexLock.h"
 #include "Utils.h"
 
+// 由于多线程输出信息时会显得比较乱,因此设置一个互斥锁
+MutexLock logLock;
 std::ostream& logmsg(int flag)
 {
+    // 输出信息时,设置线程互斥
+    MutexLockGuard guard(logLock);
+    // 获取线程 TID
+    long tid = syscall(SYS_gettid);
     if(flag == ERROR)
     {
-        std::cerr << "[ERROR]\t";
+        std::cerr << tid << ": [ERROR]\t";
         return std::cerr;       
     }
     else if(flag == INFO)
     {
-        std::cout << "[INFO]\t";
+        std::cout << tid << ": [INFO]\t";
         return std::cout;
     }
     else
