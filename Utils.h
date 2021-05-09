@@ -21,6 +21,13 @@ std::ostream& logmsg(int flag);
 int socket_bind_and_listen(int port);
 
 /**
+ * @brief 设置传入的socket为非阻塞模式
+ * @param fd 传入的目标套接字
+ * @return 0表示设置成功, -1表示设置失败
+ */
+int setSocketNoBlock(int fd);
+
+/**
  * @brief   read的多线程版本
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址

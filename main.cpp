@@ -12,13 +12,17 @@ using namespace std;
 
 void handlerConnect(void* arg)
 {
-    int client_fd = *((int*)arg);
+    int* fd_ptr = (int*)arg;
+    int client_fd = *fd_ptr;
+    delete fd_ptr;
+
     if(client_fd < 0)
     {
         LOG(ERROR) << "client_fd error in handlerConnect" << endl;
         return;
     }
     HttpHandler handler(client_fd);
+    // 目前先做无连续连接的方式
     handler.RunEventLoop();
     close(client_fd);
 }
@@ -52,7 +56,8 @@ int main(int argc, char* argv[])
             continue;
         }
         // 将其放入线程池中并行执行
-        thread_pool.appendTask(handlerConnect, (void*)&client_fd);
+        int* curr_fd_ptr = new int(client_fd);
+        thread_pool.appendTask(handlerConnect, curr_fd_ptr);
     }
 
     return 0;

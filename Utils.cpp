@@ -1,4 +1,5 @@
 #include <cstring>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -40,9 +41,12 @@ int socket_bind_and_listen(int port)
     memset(&server_addr, '\0', sizeof(server_addr));
     // 设置一下基本操作
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htonl((unsigned short)port);
+    server_addr.sin_port = htons((unsigned short)port);
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
+    // 端口复用
+    int opt = 1;
+    if(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
+        return -1;
     // 试着bind
     if(bind(listen_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == -1)
         return -1;
@@ -51,6 +55,18 @@ int socket_bind_and_listen(int port)
         return -1;
 
     return listen_fd;
+}
+
+int setSocketNoBlock(int fd)
+{
+    // 获取fd对应的flag
+    int flag = fcntl(fd, F_GETFD);
+    if(flag == -1)
+        return -1;
+    flag |= O_NONBLOCK;
+    if(fcntl(fd, F_SETFL, flag) == -1)
+        return -1;
+    return 0;
 }
 
 ssize_t readn(int fd, void*buf, size_t len)
