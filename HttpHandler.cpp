@@ -12,8 +12,6 @@
 #include "HttpHandler.h"
 #include "Utils.h"
 
-// TODO content-type supoort
-
 HttpHandler::HttpHandler(int fd) : client_fd_(fd) 
 {
     
@@ -205,8 +203,6 @@ void HttpHandler::RunEventLoop()
     }  
     else
     {
-        // HTTP body
-        string responseBodyType = "text/html";
         // 获取目标文件的大小
         struct stat st;
         if(!stat(path_.c_str(), &st))
@@ -227,7 +223,15 @@ void HttpHandler::RunEventLoop()
         // 将数据从内存页存入至 responseBody
         char* file_data_ptr = static_cast<char*>(addr);
         string responseBody(file_data_ptr, file_data_ptr + st.st_size);
+
+        // 获取 Content-type
+        string suffix = path_;
+        // 通过循环找到最后一个 dot
+        size_t dot_pos;
+        while((dot_pos = suffix.find('.')) != string::npos)
+            suffix = suffix.substr(dot_pos + 1);
+
         // 发送数据
-        sendResponse("200", "OK", responseBody, responseBodyType);
+        sendResponse("200", "OK", responseBody, MimeType::getMineType(suffix));
     }
 }

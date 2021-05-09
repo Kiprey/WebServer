@@ -90,4 +90,49 @@ public:
     int getClientFd()           { return client_fd_; }
 };
 
+class MimeType
+{
+private:
+    // (suffix -> type)
+    map<string, string> mime_map_;
+
+    string getMineType_(string suffix)
+    {
+        if(mime_map_.find(suffix) != mime_map_.end())
+            return mime_map_[suffix];
+        else
+            return mime_map_["default"];
+    }
+public:
+    MimeType()
+    {
+        mime_map_["doc"] = "application/msword";
+        mime_map_["gz"] = "application/x-gzip";
+        mime_map_["ico"] = "application/x-ico";
+
+        mime_map_["gif"] = "image/gif";
+        mime_map_["jpg"] = "image/jpeg";
+        mime_map_["png"] = "image/png";
+        mime_map_["bmp"] = "image/bmp";
+
+        mime_map_["mp3"] = "audio/mp3";
+        mime_map_["avi"] = "video/x-msvideo";
+
+        mime_map_["html"] = "text/html";
+        mime_map_["htm"] = "text/html";
+        mime_map_["css"] = "text/html";
+        mime_map_["js"] = "text/html";
+
+        mime_map_["c"] = "text/plain";
+        mime_map_["txt"] = "text/plain";
+        mime_map_["default"] = "text/plain";
+    }
+
+    static string getMineType(string suffix)
+    {
+        static MimeType* _mimeTy = new MimeType();
+        return _mimeTy->getMineType_(suffix);
+    }
+};
+
 #endif
