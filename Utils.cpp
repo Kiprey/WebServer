@@ -57,7 +57,7 @@ int socket_bind_and_listen(int port)
     return listen_fd;
 }
 
-int setSocketNoBlock(int fd)
+bool setSocketNoBlock(int fd)
 {
     // 获取fd对应的flag
     int flag = fcntl(fd, F_GETFD);
@@ -65,8 +65,8 @@ int setSocketNoBlock(int fd)
         return -1;
     flag |= O_NONBLOCK;
     if(fcntl(fd, F_SETFL, flag) == -1)
-        return -1;
-    return 0;
+        return false;
+    return true;
 }
 
 ssize_t readn(int fd, void*buf, size_t len)
