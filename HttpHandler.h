@@ -1,10 +1,71 @@
 #ifndef HTTPHANDLER_H
 #define HTTPHANDLER_H
 
+#include <iostream>
+#include <map>
+#include <unordered_map>
+using namespace std;
+
 class HttpHandler
 {
 private:
+    const int MAXBUF = 1024;
+
     int client_fd_;
+    // http 请求包的所有数据
+    string request_;
+    // http 头部
+    unordered_map<string, string> headers_; 
+    
+    // 请求方式
+    string method_;
+    // 请求路径
+    string path_;
+    // http版本号
+    string http_version_;
+
+    /**
+     * @brief 将当前client_fd_对应的连接信息,以 LOG(INFO) 的形式输出
+     */
+    void printConnectionStatus();
+
+    /**
+     * @brief 从client_fd_中读取数据至 request_中
+     */
+    void readRequest();
+
+    /**
+     * @brief 从0位置处解析 请求方式\URI\HTTP版本等
+     * @return 解析终止的位置
+     */
+    size_t parseURI();
+
+    /**
+     * @brief 从request_中的pos位置开始解析 http header
+     * @param pos 起始解析的位置
+     * @return 解析终止的位置
+     */
+    size_t parseHttpHeader(size_t pos);
+    
+    /**
+     * @brief   发送响应报文给客户端
+     * @param   responseCode        http 状态码, http报文第二个字段
+     * @param   responseMsg         http 报文第三个字段
+     * @param   responseBodyType    返回的body类型,即 Content-type
+     * @param   responseBody        返回的body内容
+     * @return  true代表发送成功,false代表发送失败
+     */
+    bool sendResponse(const string& responseCode, const string& responseMsg, 
+                      const string& responseBodyType, const string& responseBody);
+    
+    /**
+     * @brief 发送错误信息至客户端
+     * @param errCode   错误http状态码
+     * @param errMsg    错误信息, http报文第三个字段
+     * @return true 代表发送成功, false 代表发送失败
+     */
+    bool handleError(const string& errCode, const string& errMsg);
+
 public:
     /**
      * @brief   显式指定 client fd
@@ -20,12 +81,13 @@ public:
 
     /**
      * @brief   为当前连接启动事件循环
-     * @note    在执行事件循环开始之前,一定要设置 client fd
+     * @note    1. 在执行事件循环开始之前,一定要设置 client fd
+     *          2. 异常处理不完备
      */ 
     void RunEventLoop();
 
-    void setClientFd(int fd)    { client_fd_ = fd; }
-    int getClientFd()          { return client_fd_; }
+    // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
+    int getClientFd()           { return client_fd_; }
 };
 
 #endif
