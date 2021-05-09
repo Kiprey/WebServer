@@ -9,12 +9,9 @@
 #include "MutexLock.h"
 #include "Utils.h"
 
-// 由于多线程输出信息时会显得比较乱,因此设置一个互斥锁
-MutexLock logLock;
 std::ostream& logmsg(int flag)
 {
     // 输出信息时,设置线程互斥
-    MutexLockGuard guard(logLock);
     // 获取线程 TID
     long tid = syscall(SYS_gettid);
     if(flag == ERROR)

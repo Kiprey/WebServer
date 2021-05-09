@@ -282,4 +282,5 @@ void HttpHandler::RunEventLoop()
         // 发送数据
         sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
+    LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
 }
