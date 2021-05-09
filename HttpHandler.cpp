@@ -31,7 +31,7 @@ void HttpHandler::printConnectionStatus()
 
     if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
         && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
-        LOG(INFO) << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
+        LOG(INFO) << "(socket: " << client_fd_ << ")" << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
               << " <---> [Client] " << inet_ntoa(peerAddr.sin_addr) << ":" << ntohs(peerAddr.sin_port) << endl;
 }
 
@@ -68,6 +68,8 @@ void HttpHandler::readRequest()
 
 size_t HttpHandler::parseURI()
 {
+    assert(!request_.empty());
+
     size_t pos1, pos2;
     
     pos1 = request_.find("\r\n");
@@ -78,13 +80,14 @@ size_t HttpHandler::parseURI()
     assert(pos1 != string::npos);
     method_ = first_line.substr(0, pos1);
 
-    LOG(INFO) << "Method: ";
+    string output_method = "Method: ";
     if(method_ == "POST")
-        LOG(INFO) << "POST" << endl;
+        output_method += "POST";
     else if(method_ == "GET")
-        LOG(INFO) << "GET" << endl;
+        output_method += "GET";
     else
-        LOG(ERROR) << method_ << "(UNIMPLEMENTED)" << endl;
+        output_method += method_ + "(UNIMPLEMENTED)";
+    LOG(INFO) << output_method << endl;
 
     // b. 查找目标路径
     pos1++;
@@ -170,9 +173,9 @@ void HttpHandler::printStr(const string& str)
     }
     // 将读取到的数据输出
     if(msg.length() > MAXBUF)
-        LOG(INFO) << "{ " << msg.substr(0, MAXBUF) << " ... ... " << " }" << endl;
+        LOG(INFO) << "{" << msg.substr(0, MAXBUF) << " ... ... " << "}" << endl;
     else
-        LOG(INFO) << "{ " << msg << " }" << endl;
+        LOG(INFO) << "{" << msg << "}" << endl;
 
 }
 
