@@ -83,7 +83,7 @@ bool setSocketNoDelay(int fd)
     return true;
 }
 
-ssize_t readn(int fd, void*buf, size_t len)
+ssize_t readn(int fd, void*buf, size_t len, bool isBlock, bool isRead)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;
@@ -94,7 +94,12 @@ ssize_t readn(int fd, void*buf, size_t len)
         ssize_t tmpRead = 0;
         // 尝试循环读取,如果报错,则进行判断
         // 注意, read 的返回值为0则表示读取到 EOF,是正常现象
-        if((tmpRead = read(fd, pos, leftNum)) < 0)
+        if(isRead)
+            tmpRead = read(fd, pos, leftNum);
+        else
+            tmpRead = recv(fd, pos, leftNum, (isBlock ? 0 : MSG_DONTWAIT));
+        
+        if(tmpRead < 0)
         {
             if(errno == EINTR)
                 tmpRead = 0;
@@ -104,16 +109,22 @@ ssize_t readn(int fd, void*buf, size_t len)
             else
                 return -1;
         }
+        // 读取的0,则说明远程连接已被关闭
         if(tmpRead == 0)
             break;
         readNum += tmpRead;
         pos += tmpRead;
+
+        // 如果是阻塞模式下,并且读取到的数据较小,则说明数据已经全部读取完成,直接返回
+        if(isBlock && static_cast<size_t>(tmpRead) < leftNum)
+            break;
+
         leftNum -= tmpRead;
     }
     return readNum;
 }
 
-ssize_t writen(int fd, void*buf, size_t len)
+ssize_t writen(int fd, void*buf, size_t len, bool isWrite)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;
@@ -122,9 +133,15 @@ ssize_t writen(int fd, void*buf, size_t len)
     while(leftNum > 0)
     {
         ssize_t tmpWrite = 0;
+
+        if(isWrite)
+            tmpWrite = write(fd, pos, leftNum);
+        else
+            tmpWrite = send(fd, pos, leftNum, 0);
+
         // 尝试循环写入,如果报错,则进行判断
         // 注意,write返回0属于异常现象,因此判断时需要包含
-        if((tmpWrite = write(fd, pos, leftNum)) <= 0)
+        if(tmpWrite < 0)
         {
             // 与read不同的是,如果 EAGAIN,则继续重复写入,因为写入操作是有Server这边决定的
             if(errno == EINTR || errno == EAGAIN)

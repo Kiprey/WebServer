@@ -20,6 +20,7 @@ std::ostream& logmsg(int flag);
  * @brief  绑定一个端口号并返回一个 fd
  * @param  port 目标端口号
  * @return 运行正常则返回 fd, 否则返回 -1
+ * @note   该函数在错误时会生成 errno
  */
 int socket_bind_and_listen(int port);
 
@@ -40,24 +41,33 @@ bool setSocketNoBlock(int fd);
 bool setSocketNoDelay(int fd);
 
 /**
- * @brief   read的wrapper
+ * @brief   read/recv的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
+ * @param   isBlock true 则以阻塞模式读取,否则以 非阻塞模式读取
+ * @param   isRead  启用 read 函数
  * @return  成功读取的长度
  * @note    内部函数在错误时会生成 errno
+ * @note    阻塞模式下,如果读取到任何数据则函数马上返回,如果没有读取到数据则阻塞
+ *          非阻塞模式下,无论有没有读取到数据,都会马上返回
+ * @note    默认情况下, 启用阻塞模式的recv函数(注意启用前必须已经设置 socket 为阻塞模式)
+ * @note    recv函数与read函数的不同之处在于,recv专为socket而生,支持更多的错误处理
  */
-ssize_t readn(int fd, void*buf, size_t len);
+ssize_t readn(int fd, void*buf, size_t len, 
+                bool isBlock = true, bool isRead = false);
 
 /**
- * @brief   write的wrapper
+ * @brief   write/send的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
+ * @param   isWrite 启用 write 函数
  * @return  成功读取的长度
  * @note    内部函数在错误时会生成 errno
+ * @note    该函数将 **阻塞** 写入数据, 除非有其他错误发生
  */
-ssize_t writen(int fd, void*buf, size_t len);
+ssize_t writen(int fd, void*buf, size_t len, bool isWrite = false);
 
 /**
  * @brief 忽略 SIGPIPE信号
