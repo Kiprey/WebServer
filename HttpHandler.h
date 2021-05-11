@@ -122,11 +122,12 @@ private:
     ERROR_TYPE handleError(const string& errCode, const string& errMsg);
 
     /**
-     * @brief 将传入的字符串转义成终端可以直接显示的输出,并输出至终端
+     * @brief 将传入的字符串转义成终端可以直接显示的输出
      * @param str 待输出的字符串
+     * @return 转义后的字符串
      * @note  是将 '\r' 等无法在终端上显示的字符,转义成 "\r"字符串 输出
      */
-    void printStr (const string& str);
+    string escapeStr (const string& str);
 };
 
 class MimeType

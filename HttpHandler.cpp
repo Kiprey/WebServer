@@ -195,7 +195,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
     return ERR_SUCCESS;
 }
 
-void HttpHandler::printStr(const string& str)
+string HttpHandler::escapeStr(const string& str)
 {
     string msg = str;
     // 遍历所有字符
@@ -221,9 +221,9 @@ void HttpHandler::printStr(const string& str)
     }
     // 将读取到的数据输出
     if(msg.length() > MAXBUF)
-        LOG(INFO) << "{" << msg.substr(0, MAXBUF) << " ... ... " << "}" << endl;
+        return msg.substr(0, MAXBUF) + " ... ... ";
     else
-        LOG(INFO) << "{" << msg << "}" << endl;
+        return msg;
 
 }
 
@@ -244,7 +244,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
 
     // 输出返回的数据
     LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
-    printStr(response);
+    LOG(INFO) << "{" << escapeStr(response) << "}" << endl;
 
     if(len < 0 || static_cast<size_t>(len) != response.size())
         return ERR_SEND_RESPONSE_FAIL;
@@ -289,7 +289,7 @@ void HttpHandler::RunEventLoop()
             // 断开连接     
             break;
         }
-        printStr(request_);
+        LOG(INFO) << "{" << escapeStr(request_) << "}" << endl;
         
         // 解析信息 ------------------------------------------
         LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
@@ -329,9 +329,9 @@ void HttpHandler::RunEventLoop()
             continue;
         }
         // 3. 输出剩余的 HTTP body
-        LOG(INFO) << "HTTP Body: [" 
-                << request_.substr(pos_, request_.length() - pos_) 
-                << "]" << endl;
+        LOG(INFO) << "HTTP Body: {" 
+                << escapeStr(request_.substr(pos_, request_.length() - pos_)) 
+                << "}" << endl;
 
         // 发送目标数据 ------------------------------------------
 
