@@ -82,9 +82,14 @@ void* ThreadPool::TaskForWorkerThreads_(void* arg)
             // 获取事件时需要上个锁
             MutexLockGuard guard(pool->threadpool_mutex_);
 
-            // 如果好不容易获得到锁了,但是没有事件可以执行
-            if(pool->task_queue_.size() == 0)
-                // 则陷入沉睡,释放锁,并等待唤醒
+            /** 
+             * 如果好不容易获得到锁了,但是没有事件可以执行
+             * 则陷入沉睡,释放锁,并等待唤醒
+             * NOTE: 注意, pthread_cond_signal 会唤醒至少一个线程
+             *       也就是说,可能存在被唤醒的线程仍然没有事件处理的情况
+             *       这时只需循环wait即可.
+             */ 
+            while(pool->task_queue_.size() == 0)
                 pool->threadpool_cond_.wait();
             // 唤醒后一定有事件
             assert(pool->task_queue_.size() != 0);
