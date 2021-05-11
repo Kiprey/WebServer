@@ -202,7 +202,8 @@ string HttpHandler::escapeStr(const string& str)
     for(size_t i = 0; i < msg.length(); i++)
     {
         char ch = msg[i];
-        if(iscntrl(ch))
+        // 如果当前字符无法打印,则转义
+        if(!isprint(ch))
         {
             // 这里只对\r\n做特殊处理
             string substr;
@@ -213,7 +214,8 @@ string HttpHandler::escapeStr(const string& str)
             else
             {
                 char hex[10];
-                sprintf(hex, "\\x%02x", ch);
+                // 注意这里要设置成 unsigned,即零扩展
+                snprintf(hex, 10, "\\x%02x", static_cast<unsigned char>(ch));
                 substr = hex;
             }
             msg.replace(i, 1, substr);
