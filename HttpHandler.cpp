@@ -187,6 +187,9 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
         if(value != "keep-alive")
             isKeepAlive_ = false;
     }
+    // 判断处理空 header 条目的 \r\n
+    if((request_.size() < pos1 + 2) || (request_.substr(pos1, 2) != "\r\n"))
+        return ERR_BAD_REQUEST;
 
     pos_ = pos1 + 2;
     return ERR_SUCCESS;
@@ -290,7 +293,7 @@ void HttpHandler::RunEventLoop()
         
         // 解析信息 ------------------------------------------
         LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
-        
+
         // 1. 先解析第一行
         if((err_ty = parseURI()) != ERR_SUCCESS)
         {
