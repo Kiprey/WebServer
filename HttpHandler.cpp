@@ -28,7 +28,8 @@ void HttpHandler::printConnectionStatus()
 {
     // 输出连接信息 [Server]IP:PORT <---> [Client]IP:PORT
     sockaddr_in serverAddr, peerAddr;
-    socklen_t serverAddrLen, peerAddrLen;
+    socklen_t serverAddrLen = sizeof(serverAddr);
+    socklen_t peerAddrLen = sizeof(peerAddr);
 
     if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
         && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
@@ -47,16 +48,10 @@ bool HttpHandler::readRequest()
     // 循环非阻塞读取 ------------------------------------------
     for(;;)
     {
-        /**
-         * 注意,read函数在阻塞状态下,根据我的观察,不管有没有读取到数据,除非远程直接关闭连接,否则 read 函数将不会返回
-         * 而 read 函数在非阻塞状态下时,若有数据就直接读取,没有数据就返回 EAGAIN
-         * 
-         * 我的目的是:read函数调用时,若有数据就直接读取返回,若没有读取则阻塞.
-         */ 
-        int len = readn(client_fd_, buffer, MAXBUF);
+        ssize_t len = readn(client_fd_, buffer, MAXBUF, true, true);
         if(len < 0)
         {
-            // LOG(ERROR) << "读取request异常, " << strerror(errno) << endl;
+            LOG(INFO) << "Read request failed ! " << strerror(errno) << endl;
             return false;
         }
         /** 
@@ -64,6 +59,8 @@ bool HttpHandler::readRequest()
          * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
          * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
          * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
+         * 
+         * 如果读取到的字节数为0,则说明远程连接已经被关闭.
          */
         else if(len == 0)
         {
@@ -71,14 +68,22 @@ bool HttpHandler::readRequest()
             if(request_.length() > 0)
                 // 直接停止读取
                 break;
-            // 否则设置为阻塞状态,继续进行读取操作
-            // TODO 这里需要换种更好的方式来实现
+            // 如果此时既没读取到数据,之前的 request_也为空,则表示远程连接已经被关闭
+            else
+            {
+                LOG(INFO) << "Socket(" << client_fd_ << ") was closed." << endl;
+                return false;
+            }
         }
         // LOG(INFO) << "Read data: " << buffer << endl;
 
         // 将读取到的数据组装起来
         string request(buffer, buffer + len);
         request_ += request;
+
+        // 由于当前的读取方式为阻塞读取,因此如果读取到的数据已经全部读取完成,则直接返回
+        if(static_cast<size_t>(len) < MAXBUF)
+            break;
     }
     return true;
 }
@@ -242,10 +247,7 @@ void HttpHandler::RunEventLoop()
     LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
     // 从socket读取请求数据, 如果读取失败
     if(!readRequest())
-    {
-        LOG(INFO) << "Read request failed ! " << strerror(errno) << endl;
-        return;
-    }
+        goto connectClose;
     printStr(request_);
     
     // 解析信息 ------------------------------------------
@@ -277,7 +279,7 @@ void HttpHandler::RunEventLoop()
         if(stat(path_.c_str(), &st) == -1)
         {
             LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << endl;
-            return;
+            goto connectClose;
         }
         // 读取文件, 使用 mmap 来高速读取文件
         void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
@@ -287,7 +289,7 @@ void HttpHandler::RunEventLoop()
         if(addr == MAP_FAILED)
         {
             LOG(ERROR) << "Can not map file [" << path_ << "] -> mem ! " << endl;
-            return;
+            goto connectClose;
         }
         // 将数据从内存页存入至 responseBody
         char* file_data_ptr = static_cast<char*>(addr);
@@ -306,5 +308,6 @@ void HttpHandler::RunEventLoop()
         // 发送数据
         sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
+connectClose:
     LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
 }

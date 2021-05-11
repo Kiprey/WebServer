@@ -41,7 +41,8 @@ int main(int argc, char* argv[])
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)
     {
-        LOG(ERROR) << "Bind " << port << " port failed !" << endl;
+        LOG(ERROR) << "Bind " << port << " port failed ! " 
+                   << strerror(errno) << endl;
         exit(EXIT_FAILURE);
     }
     // 创建线程池
@@ -60,12 +61,12 @@ int main(int argc, char* argv[])
         }
 
         // 设置 read 非阻塞读取. 注意套接字仍然是阻塞的,这是为了阻塞 accept 函数
-        if(!setSocketNoBlock(client_fd))
-        {
-            LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
-                       << strerror(errno) << endl;
-            continue;
-        }
+        // if(!setSocketNoBlock(client_fd))
+        // {
+        //     LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
+        //                << strerror(errno) << endl;
+        //     continue;
+        // }
         
         // 禁用延迟读写
         // if(!setSocketNoDelay(client_fd))
