@@ -6,7 +6,6 @@
 /**
  * @brief MutexLock 将 pthread_mutex 封装成一个类, 
  *        这样做的好处是不用记住那些繁杂的 pthread 开头的函数使用方式
- * @todo  有时间的话再进行异常处理 / 扩展更多功能
  */ 
 class MutexLock
 {
@@ -17,8 +16,6 @@ public:
     ~MutexLock()    { pthread_mutex_destroy(&mutex_); }
     void lock()     { pthread_mutex_lock(&mutex_); }
     void unlock()   { pthread_mutex_unlock(&mutex_); }
-    /// @note 这里原先打算返回 reference, 但担心调用者搞不清楚返回的是 reference 还是 copy,
-    ///       因此显式返回一个指针.
     pthread_mutex_t* getMutex() { return &mutex_; };
 };
 

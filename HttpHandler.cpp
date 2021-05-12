@@ -50,7 +50,7 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 
     char buffer[MAXBUF];
     
-    // 循环非阻塞读取 ------------------------------------------
+    // 循环阻塞读取 ------------------------------------------
     for(;;)
     {
         ssize_t len = readn(client_fd_, buffer, MAXBUF, true, true);
@@ -98,7 +98,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
     pos1 = request_.find("\r\n");
     if(pos1 == string::npos)    return ERR_BAD_REQUEST;
     string&& first_line = request_.substr(0, pos1);
-    // a. 查找post/get
+    // a. 查找get
     pos1 = first_line.find(' ');
     if(pos1 == string::npos)    return ERR_BAD_REQUEST;
     method_ = first_line.substr(0, pos1);

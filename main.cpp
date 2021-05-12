@@ -22,7 +22,6 @@ void handlerConnect(void* arg)
         return;
     }
     HttpHandler handler(client_fd);
-    // 目前先做无连续连接的方式
     handler.RunEventLoop();
     close(client_fd);
 }
