@@ -60,7 +60,9 @@ WebServer 1.0 简单实现了一个基础的 **多并发网络服务程序** 。
   - 支持 HTTP GET 请求
   - 支持 HTTP/1.1 **持续连接** 特性
 
-项目代码位于 [Kiprey/WebServer - github](https://github.com/Kiprey/WebServer/tree/bf5af6bddab551b8f950bf5ab3793e4a33d527ef)
+1.0 版本的项目代码位于 [Kiprey/WebServer CommitID: 4095cc - github](https://github.com/Kiprey/WebServer/tree/4095ccc6fd3facd3988ea71178cacad7b4e0dd13)
+
+最新版本的项目代码位于 [Kiprey/WebServer - github](https://github.com/Kiprey/WebServer)
 
 <!-- more -->
 
