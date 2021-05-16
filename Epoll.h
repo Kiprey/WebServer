@@ -14,6 +14,12 @@ public:
      */
     Epoll(int flag = 0);
     ~Epoll();
+
+    /**
+     * @brief 确定当前epoll文件描述符是否有效
+     * @return 有效则返回 true, 无效则返回 false
+     */ 
+    bool isEpollValid();
     
     /**
      * @brief 创建一个 epoll 实例

@@ -16,10 +16,15 @@ Epoll::~Epoll()
     delete[] events_;
 }
 
+bool Epoll::isEpollValid()
+{
+    return epoll_fd_ >= 0;
+}
+
 bool Epoll::create(int flag)
 {
     // 这里添加 epoll_fd_ < 0 的判断条件,防止重复 create.
-    if((epoll_fd_ < 0) 
+    if(!isEpollValid()
         && ((epoll_fd_ = epoll_create1(flag)) == -1))
     {
         LOG(ERROR) << "Create Epoll fail! " << strerror(errno) << endl;
@@ -30,43 +35,52 @@ bool Epoll::create(int flag)
 
 bool Epoll::add(int fd, void* data, int event)
 {
-    assert(epoll_fd_ >= 0);
+    if(isEpollValid())
+    {
+        epoll_event ep_event;
+        ep_event.events = event;
+        ep_event.data.ptr = data;
 
-    epoll_event ep_event;
-    ep_event.events = event;
-    ep_event.data.ptr = data;
-
-    return (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) != -1);
+        return (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) != -1);
+    }
+    return false;
 }
 
 bool Epoll::modify(int fd, void* data, int event)
 {
-    assert(epoll_fd_ >= 0);
+    if(isEpollValid())
+    {
+        epoll_event ep_event;
+        ep_event.events = event;
+        ep_event.data.ptr = data;
+        
+        return (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) != -1);
+    }
 
-    epoll_event ep_event;
-    ep_event.events = event;
-    ep_event.data.ptr = data;
-    
-    return (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) != -1);
+    return false;
 }
 
 bool Epoll::del(int fd)
 {
-    assert(epoll_fd_ >= 0);
-    return (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) != -1);
+    if(isEpollValid())
+        return (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) != -1);
+    return false;
 }
 
 int Epoll::wait(int timeout)
 {
-    assert(epoll_fd_ >= 0);
-    return (epoll_wait(epoll_fd_, events_, MAX_EVENTS, timeout) != -1);
+    if(isEpollValid())
+        return (epoll_wait(epoll_fd_, events_, MAX_EVENTS, timeout) != -1);
+    return false;
 }
 
 void Epoll::destroy()
 {
     // 如果文件描述符正常,则进行销毁
-    if(epoll_fd_ >= 0)
+    if(isEpollValid())
         close(epoll_fd_);
+    // 重置 epoll_fd_ 为无效描述符
+    epoll_fd_ = -1;
 }
 
 epoll_event Epoll::getEvent(size_t index)
