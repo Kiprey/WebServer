@@ -4,9 +4,10 @@
 
 #include "Epoll.h"
 
-Epoll::Epoll() : epoll_fd_(-1)
+Epoll::Epoll(int flag) : epoll_fd_(-1)
 {
     events_ = new epoll_event[MAX_EVENTS];
+    create(flag);
 }
 
 Epoll::~Epoll()

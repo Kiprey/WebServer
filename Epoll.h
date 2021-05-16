@@ -9,7 +9,10 @@ using namespace std;
 class Epoll
 {
 public:
-    Epoll();
+    /**
+     * @brief 默认声明该 Epoll 类实例是自动分配 epoll实例
+     */
+    Epoll(int flag = 0);
     ~Epoll();
     
     /**
