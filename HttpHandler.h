@@ -4,6 +4,9 @@
 #include <iostream>
 #include <map>
 #include <unordered_map>
+
+#include "Epoll.h"
+
 using namespace std;
 
 /**
@@ -30,9 +33,10 @@ public:
 
     /**
      * @brief   显式指定 client fd
-     * @param   fd 连接的 fd, 初始值为 -1
+     * @param   epoll_fd    epoll 实例相关的描述符
+     * @param   fd          连接的 fd, 初始值为 -1
      */
-    explicit HttpHandler(int fd = -1);
+    explicit HttpHandler(Epoll* epoll, int fd);
 
     /**
      * @brief   释放所有 HttpHandler 所使用的资源
@@ -49,11 +53,13 @@ public:
 
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
+    Epoll* getEpoll()            { return epoll_; }
 
 private:
     const size_t MAXBUF = 1024;
 
     int client_fd_;
+    Epoll* epoll_;
     // http 请求包的所有数据
     string request_;
     // http 头部

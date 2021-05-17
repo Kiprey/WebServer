@@ -15,7 +15,7 @@
 #include "HttpHandler.h"
 #include "Utils.h"
 
-HttpHandler::HttpHandler(int fd) : client_fd_(fd)
+HttpHandler::HttpHandler(Epoll* epoll, int fd) : client_fd_(fd), epoll_(epoll)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close

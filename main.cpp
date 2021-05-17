@@ -4,26 +4,86 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "Epoll.h"
 #include "HttpHandler.h"
 #include "ThreadPool.h"
 #include "Utils.h"
 
 using namespace std;
 
-void handlerConnect(void* arg)
+/**
+ * @brief 处理新的连接
+ * @param epoll     存放新连接的Epoll类实例 
+ * @param listen_fd 新连接所对应的 listen 描述符
+ */ 
+void handlerNewConnections(Epoll* epoll, int listen_fd)
 {
-    int* fd_ptr = (int*)arg;
-    int client_fd = *fd_ptr;
-    delete fd_ptr;
-
-    if(client_fd < 0)
+    // 注意:可能会有很多个 connect 动作,但只会有一个 event
+    sockaddr_in client_addr;
+    socklen_t client_addr_len = 0;
+    int client_fd = -1;
+    /**
+     *  如果 
+     *      1. accept 没有发生错误
+     *      2. accppt 发生了 EINTR 错误
+     *      3. accept 发生了 ECONNABORTED 错误(该错误是远程连接被中断)
+     *  则重新循环
+     */
+    while((client_fd = accept(listen_fd, (sockaddr*)&client_addr, &client_addr_len)) != -1
+            || (errno == EINTR)
+            || (errno == ECONNABORTED))
     {
-        LOG(ERROR) << "client_fd error in handlerConnect" << endl;
+        // 设置 client_fd 非阻塞
+        if(!setSocketNoBlock(client_fd))
+        {
+            LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
+                        << strerror(errno) << endl;
+            // 如果报错,注意关闭 client_fd
+            /// TODO: 关闭 client_fd 之前, 发送一个 500 错误?
+            close(client_fd);
+            continue;
+        }
+        /** 构建一个新的 HttpHandler,并放入 epoll 实例中
+         *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
+         *  且每个套接字只会被一个线程处理
+         *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
+         *        每个 client_handler 也只会在自己的类成员函数中被释放
+         */
+        HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
+        epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    }
+    // accept 的错误处理
+    if(errno != EAGAIN)
+        LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
+}
+
+/**
+ * @brief 处理旧的连接
+ * @param thread_pool   目标线程池
+ * @param event         待处理的事件
+ */
+void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
+{
+    HttpHandler* handler = static_cast<HttpHandler*>(event->data.ptr);
+    // 处理一些错误事件
+    int events_ = event->events;
+    // 如果存在错误,或者不是因为 read 事件而被唤醒
+    if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || !(events_ & EPOLLIN))
+    {
+        LOG(ERROR) << "Error events(" << events_ << ")" << endl;
+        // 当某个 handler 无法使用时,一定要销毁内存
+        delete handler;
+        // 之后重新开始遍历新的事件.
         return;
     }
-    HttpHandler handler(client_fd);
-    handler.RunEventLoop();
-    close(client_fd);
+    // 如果没有错误发生,则将其放入线程池中并行执行
+    auto handlerConnect = [](void* arg)
+    {
+        HttpHandler* handler = static_cast<HttpHandler*>(arg);
+        handler->RunEventLoop();
+    };
+    
+    thread_pool->appendTask(handlerConnect, handler);
 }
 
 int main(int argc, char* argv[])
@@ -36,6 +96,8 @@ int main(int argc, char* argv[])
 
     // 忽略 SIGPIPE 信号
     handleSigpipe();
+    // 创建线程池
+    ThreadPool thread_pool(4);
 
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)
@@ -44,41 +106,64 @@ int main(int argc, char* argv[])
                    << strerror(errno) << endl;
         exit(EXIT_FAILURE);
     }
-    // 创建线程池
-    ThreadPool thread_pool(16);
+
+    // 设置 listen_fd 非阻塞
+    if(!setSocketNoBlock(listen_fd))
+    {
+        LOG(ERROR) << "Can not set socket " << listen_fd << " No Block ! " 
+                    << strerror(errno) << endl;
+        exit(EXIT_FAILURE);
+    }
+    
+    // 声明一个 epoll 实例,该实例将在整个main函数结束时被释放
+    Epoll epoll;
+    assert(epoll.isEpollValid());
+    /**
+     * 将 listen_fd 添加进 epoll 实例
+     * 这里构造了一个 HttpHandler 给 listen_fd.
+     * NOTE: 监听套接字实际上并没有处理 Http 报文
+     *       该HttpHandler的作用 **只是存放 listen_fd** .
+     *       listen_handler 将会在main函数结束前被释放(尽管main函数永不结束)
+     */
+    HttpHandler* listen_handler = new HttpHandler(&epoll, listen_fd);
+    epoll.add(listen_fd, listen_handler, EPOLLET | EPOLLIN);
+
     // 开始事件循环
     for(;;)
     {
-        sockaddr_in client_addr;
-        socklen_t client_addr_len = 0;
-        int client_fd = -1;
-        if((client_fd = accept(listen_fd, (sockaddr*)&client_addr, &client_addr_len)) == -1)
+        // 阻塞等待新的事件
+        int event_num = epoll.wait(-1);
+        // 如果报错
+        if(event_num < 0)
         {
-            LOG(ERROR) << "connect " << ntohl(client_addr.sin_addr.s_addr) << " failed !" << endl;
-            // 直接跳过
-            continue;
+            // 如果只是中断,则直接重新循环
+            if(errno == EINTR)
+                continue;
+            // 如果是其他异常,则输出信息并终止.
+            else
+            {
+                LOG(ERROR) << "epoll_wait fail! " << strerror(errno) 
+                           << ". abort!" << endl;
+                abort();
+            }
         }
-
-        // 设置 read 非阻塞读取. 注意套接字仍然是阻塞的,这是为了阻塞 accept 函数
-        // if(!setSocketNoBlock(client_fd))
-        // {
-        //     LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
-        //                << strerror(errno) << endl;
-        //     continue;
-        // }
         
-        // 禁用延迟读写
-        // if(!setSocketNoDelay(client_fd))
-        // {
-        //     LOG(ERROR) << "Can not set socket " << client_fd << " No Delay ! "
-        //                << strerror(errno) << endl;
-        //     continue;
-        // }
-
-        // 将其放入线程池中并行执行
-        int* curr_fd_ptr = new int(client_fd);
-        thread_pool.appendTask(handlerConnect, curr_fd_ptr);
+        // 遍历获取到的事件
+        for(int i = 0; i < event_num; i++)
+        {
+            // 获取事件相关的信息
+            epoll_event&& event = epoll.getEvent(static_cast<size_t>(i));
+            HttpHandler* handler = static_cast<HttpHandler*>(event.data.ptr);
+            int fd = handler->getClientFd();
+            
+            // 如果当前文件描述符是 listen_fd, 则建立连接
+            if(fd == listen_fd)
+                handlerNewConnections(&epoll, listen_fd);
+            else
+                handlerOldConnection(&thread_pool, &event);
+        }
     }
+    delete listen_handler;
 
     return 0;
 }
