@@ -14,6 +14,9 @@
 #include "HttpHandler.h"
 #include "Utils.h"
 
+// 声明一下该静态成员变量
+string HttpHandler::www_path;
+
 HttpHandler::HttpHandler(Epoll* epoll, int fd) 
     : client_fd_(fd), epoll_(epoll), isClosed_(false)
 {
@@ -204,7 +207,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
 
     // 输出返回的数据
     LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
-    LOG(INFO) << "{" << escapeStr(response) << "}" << endl;
+    LOG(INFO) << "{" << escapeStr(response, MAXBUF) << "}" << endl;
 
     if(len < 0 || static_cast<size_t>(len) != response.size())
         return ERR_SEND_RESPONSE_FAIL;
@@ -245,7 +248,7 @@ void HttpHandler::RunEventLoop()
             // 断开连接     
             break;
         }
-        LOG(INFO) << "{" << escapeStr(request_) << "}" << endl;
+        LOG(INFO) << "{" << escapeStr(request_, MAXBUF) << "}" << endl;
         
         // 解析信息 ------------------------------------------
         LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
@@ -286,7 +289,7 @@ void HttpHandler::RunEventLoop()
         }
         // 3. 输出剩余的 HTTP body
         LOG(INFO) << "HTTP Body: {" 
-                << escapeStr(request_.substr(pos_, request_.length() - pos_)) 
+                << escapeStr(request_.substr(pos_, request_.length() - pos_), MAXBUF) 
                 << "}" << endl;
 
         // 发送目标数据 ------------------------------------------

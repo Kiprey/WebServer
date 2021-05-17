@@ -184,7 +184,7 @@ void printConnectionStatus(int client_fd_, string prefix)
         LOG(ERROR) << "printConnectionStatus failed ! " << strerror(errno) << endl;
 }
 
-string escapeStr(const string& str, int MAXBUF)
+string escapeStr(const string& str, size_t MAXBUF)
 {
     string msg = str;
     // 遍历所有字符

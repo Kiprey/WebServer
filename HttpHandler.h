@@ -17,19 +17,6 @@ using namespace std;
 class HttpHandler
 {
 public:
-    /**
-     *  @brief HttpHandler内部状态 
-     */ 
-    enum ERROR_TYPE {
-        ERR_SUCCESS = 0,                // 无错误
-        ERR_READ_REQUEST_FAIL,          // 读取请求数据失败
-        ERR_NOT_IMPLEMENTED,            // 不支持一些特定的请求操作,例如 Post
-        ERR_HTTP_VERSION_NOT_SUPPORTED, // 不支持当前客户端的http版本
-        ERR_INTERNAL_SERVER_ERR,        // 程序内部错误
-        ERR_CONNECTION_CLOSED,          // 远程连接已关闭
-        ERR_BAD_REQUEST,                // 用户的请求包中存在错误,无法解析  
-        ERR_SEND_RESPONSE_FAIL          // 响应包发送失败
-    };
 
     /**
      * @brief   显式指定 client fd
@@ -64,6 +51,20 @@ public:
     static string getWWWPath()          { return www_path; }
 
 private:
+    /**
+     *  @brief HttpHandler内部错误 
+     */ 
+    enum ERROR_TYPE {
+        ERR_SUCCESS = 0,                // 无错误
+        ERR_READ_REQUEST_FAIL,          // 读取请求数据失败
+        ERR_NOT_IMPLEMENTED,            // 不支持一些特定的请求操作,例如 Post
+        ERR_HTTP_VERSION_NOT_SUPPORTED, // 不支持当前客户端的http版本
+        ERR_INTERNAL_SERVER_ERR,        // 程序内部错误
+        ERR_CONNECTION_CLOSED,          // 远程连接已关闭
+        ERR_BAD_REQUEST,                // 用户的请求包中存在错误,无法解析  
+        ERR_SEND_RESPONSE_FAIL          // 响应包发送失败
+    };
+
     // 当前 HTTP handler 的 www 工作目录
     static string www_path;
     const size_t MAXBUF = 1024;

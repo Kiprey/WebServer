@@ -96,6 +96,6 @@ void printConnectionStatus(int client_fd_, string prefix);
  * @return 转义后的字符串
  * @note  是将 '\r' 等无法在终端上显示的字符,转义成 "\r"字符串 输出
  */
-string escapeStr(const string& str);
+string escapeStr(const string& str, size_t MAXBUF);
 
 #endif
