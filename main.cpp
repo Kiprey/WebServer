@@ -99,11 +99,14 @@ void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
 
 int main(int argc, char* argv[])
 {
-    if (argc != 2) {
-        LOG(ERROR) << "usage: " << argv[0] << " <port>" << endl;
+    // 获取传入的参数
+    if (argc < 2) {
+        LOG(ERROR) << "usage: " << argv[0] << " <port> [<www_dir>]" << endl;
         exit(EXIT_FAILURE);
     }
     int port = atoi(argv[1]);
+    if(argc > 2)
+        HttpHandler::setWWWPath(argv[2]);
 
     // 忽略 SIGPIPE 信号
     handleSigpipe();

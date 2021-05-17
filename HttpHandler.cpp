@@ -20,11 +20,15 @@ HttpHandler::HttpHandler(Epoll* epoll, int fd)
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
     isKeepAlive_ = true;
+    // 如果先前没有设置 www 路径,则设置路径为当前的工作路径
+    if(www_path.empty())
+        setWWWPath(".");
 }
 
 HttpHandler::~HttpHandler()
 {
     // 关闭客户套接字
+    LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
     close(client_fd_);
 }
 
@@ -336,5 +340,4 @@ void HttpHandler::RunEventLoop()
                 LOG(ERROR) << "Send Response failed !" << endl;
         }
     }
-    LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
 }

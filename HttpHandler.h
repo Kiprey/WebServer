@@ -59,7 +59,13 @@ public:
     // 关闭当前连接, 该 HttpHandler 实例将在 事件循环结束时被释放
     void setConnectClosed()     { isClosed_ = true; }
 
+    // 设置HTTP处理时, www文件夹的路径
+    static void setWWWPath(string path) { www_path = path; };
+    static string getWWWPath()          { return www_path; }
+
 private:
+    // 当前 HTTP handler 的 www 工作目录
+    static string www_path;
     const size_t MAXBUF = 1024;
 
     int client_fd_;
