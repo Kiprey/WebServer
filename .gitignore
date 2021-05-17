@@ -6,3 +6,5 @@ WebServer
 .vscode/
 # gdb 调试相关 { 是的直接手搓gdb调试 :) }
 .gdb_history
+# 其他需要ignore的文件
+ignore_*
