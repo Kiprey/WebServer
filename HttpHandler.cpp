@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <arpa/inet.h>
 #include <cassert>
 #include <cstring>
 #include <cctype>
@@ -15,7 +14,8 @@
 #include "HttpHandler.h"
 #include "Utils.h"
 
-HttpHandler::HttpHandler(Epoll* epoll, int fd) : client_fd_(fd), epoll_(epoll)
+HttpHandler::HttpHandler(Epoll* epoll, int fd) 
+    : client_fd_(fd), epoll_(epoll), isClosed_(false)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
@@ -24,22 +24,8 @@ HttpHandler::HttpHandler(Epoll* epoll, int fd) : client_fd_(fd), epoll_(epoll)
 
 HttpHandler::~HttpHandler()
 {
-    
-}
-
-void HttpHandler::printConnectionStatus()
-{
-    // 输出连接信息 [Server]IP:PORT <---> [Client]IP:PORT
-    sockaddr_in serverAddr, peerAddr;
-    socklen_t serverAddrLen = sizeof(serverAddr);
-    socklen_t peerAddrLen = sizeof(peerAddr);
-
-    if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
-        && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
-        LOG(INFO) << "(socket: " << client_fd_ << ")" << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
-              << " <---> [Client] " << inet_ntoa(peerAddr.sin_addr) << ":" << ntohs(peerAddr.sin_port) << endl;
-    else
-        LOG(ERROR) << "printConnectionStatus failed ! " << strerror(errno) << endl;
+    // 关闭客户套接字
+    close(client_fd_);
 }
 
 HttpHandler::ERROR_TYPE HttpHandler::readRequest()
@@ -50,10 +36,10 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 
     char buffer[MAXBUF];
     
-    // 循环阻塞读取 ------------------------------------------
+    // 循环非阻塞读取 ------------------------------------------
     for(;;)
     {
-        ssize_t len = readn(client_fd_, buffer, MAXBUF, true, true);
+        ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
         if(len < 0)
         {
             return ERR_READ_REQUEST_FAIL;
@@ -195,39 +181,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
     return ERR_SUCCESS;
 }
 
-string HttpHandler::escapeStr(const string& str)
-{
-    string msg = str;
-    // 遍历所有字符
-    for(size_t i = 0; i < msg.length(); i++)
-    {
-        char ch = msg[i];
-        // 如果当前字符无法打印,则转义
-        if(!isprint(ch))
-        {
-            // 这里只对\r\n做特殊处理
-            string substr;
-            if(ch == '\r')
-                substr = "\\r";
-            else if(ch == '\n')
-                substr = "\\n";
-            else
-            {
-                char hex[10];
-                // 注意这里要设置成 unsigned,即零扩展
-                snprintf(hex, 10, "\\x%02x", static_cast<unsigned char>(ch));
-                substr = hex;
-            }
-            msg.replace(i, 1, substr);
-        }
-    }
-    // 将读取到的数据输出
-    if(msg.length() > MAXBUF)
-        return msg.substr(0, MAXBUF) + " ... ... ";
-    else
-        return msg;
 
-}
 
 HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, const string& responseMsg, 
                             const string& responseBodyType, const string& responseBody)
@@ -269,10 +223,6 @@ HttpHandler::ERROR_TYPE HttpHandler::handleError(const string& errCode, const st
 void HttpHandler::RunEventLoop()
 {
     ERROR_TYPE err_ty;
-    LOG(INFO) << "------------------- New Connection -------------------" << endl;
-
-    // 输出连接
-    printConnectionStatus();
 
     // 持续连接
     while(isKeepAlive_)

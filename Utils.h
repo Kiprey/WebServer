@@ -5,6 +5,12 @@
 #include <cstring>
 #include <csignal>
 
+using std::cout;
+using std::cerr;
+using std::endl;
+using std::string;
+using std::ostream;
+
 /**
  * @brief   输出信息相关宏定义与函数
  *          使用 `LOG(INFO) << "msg";` 形式以执行信息输出.
@@ -75,5 +81,21 @@ ssize_t writen(int fd, void*buf, size_t len, bool isWrite = false);
  *        但SIGPIPE信号默认关闭当前进程,因此在Server端处需要忽略该信号
  */
 void handleSigpipe();
+
+/**
+ * @brief 将当前client_fd_对应的连接信息,以 LOG(INFO) 的形式输出
+ * @param client_fd_ 待输出信息的 fd
+ * @param prefix     输出信息的前缀,例如 "<prefix>: <othermsg>"
+ */ 
+void printConnectionStatus(int client_fd_, string prefix);
+
+/**
+ * @brief 将传入的字符串转义成终端可以直接显示的输出
+ * @param str       待输出的字符串
+ * @param MAXBUF    最长能输出的字符串长度
+ * @return 转义后的字符串
+ * @note  是将 '\r' 等无法在终端上显示的字符,转义成 "\r"字符串 输出
+ */
+string escapeStr(const string& str);
 
 #endif

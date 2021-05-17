@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -10,24 +11,24 @@
 #include "MutexLock.h"
 #include "Utils.h"
 
-std::ostream& logmsg(int flag)
+ostream& logmsg(int flag)
 {
     // 输出信息时,设置线程互斥
     // 获取线程 TID
     long tid = syscall(SYS_gettid);
     if(flag == ERROR)
     {
-        std::cerr << tid << ": [ERROR]\t";
-        return std::cerr;       
+        cerr << tid << ": [ERROR]\t";
+        return cerr;       
     }
     else if(flag == INFO)
     {
-        std::cout << tid << ": [INFO]\t";
-        return std::cout;
+        cout << tid << ": [INFO]\t";
+        return cout;
     }
     else
     {
-        logmsg(ERROR) << "错误的 LOG 选择" << std::endl;
+        logmsg(ERROR) << "错误的 LOG 选择" << endl;
         abort();
     }
 }
@@ -165,5 +166,53 @@ void handleSigpipe()
     sa.sa_handler = SIG_IGN;
     sa.sa_flags = 0;
     if(sigaction(SIGPIPE, &sa, NULL) == -1)
-        LOG(ERROR) << "Ignore SIGPIPE failed! " << strerror(errno) << std::endl;
+        LOG(ERROR) << "Ignore SIGPIPE failed! " << strerror(errno) << endl;
+}
+
+void printConnectionStatus(int client_fd_, string prefix)
+{
+    // 输出连接信息 [Server]IP:PORT <---> [Client]IP:PORT
+    sockaddr_in serverAddr, peerAddr;
+    socklen_t serverAddrLen = sizeof(serverAddr);
+    socklen_t peerAddrLen = sizeof(peerAddr);
+
+    if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
+        && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
+        LOG(INFO) << prefix << ": (socket: " << client_fd_ << ")" << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
+              << " <---> [Client] " << inet_ntoa(peerAddr.sin_addr) << ":" << ntohs(peerAddr.sin_port) << endl;
+    else
+        LOG(ERROR) << "printConnectionStatus failed ! " << strerror(errno) << endl;
+}
+
+string escapeStr(const string& str, int MAXBUF)
+{
+    string msg = str;
+    // 遍历所有字符
+    for(size_t i = 0; i < msg.length(); i++)
+    {
+        char ch = msg[i];
+        // 如果当前字符无法打印,则转义
+        if(!isprint(ch))
+        {
+            // 这里只对\r\n做特殊处理
+            string substr;
+            if(ch == '\r')
+                substr = "\\r";
+            else if(ch == '\n')
+                substr = "\\n";
+            else
+            {
+                char hex[10];
+                // 注意这里要设置成 unsigned,即零扩展
+                snprintf(hex, 10, "\\x%02x", static_cast<unsigned char>(ch));
+                substr = hex;
+            }
+            msg.replace(i, 1, substr);
+        }
+    }
+    // 将读取到的数据输出
+    if(msg.length() > MAXBUF)
+        return msg.substr(0, MAXBUF) + " ... ... ";
+    else
+        return msg;
 }

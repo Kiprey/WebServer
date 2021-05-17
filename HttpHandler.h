@@ -46,14 +46,18 @@ public:
 
     /**
      * @brief   为当前连接启动事件循环
-     * @note    1. 在执行事件循环开始之前,一定要设置 client fd
-     *          2. 异常处理不完备
+     * @note    在执行事件循环开始之前,一定要设置 client fd
      */ 
     void RunEventLoop();
 
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
-    Epoll* getEpoll()            { return epoll_; }
+    Epoll* getEpoll()           { return epoll_; }
+
+    // 判断当前连接是否关闭
+    bool isConnectClosed()      { return isClosed_; }
+    // 关闭当前连接, 该 HttpHandler 实例将在 事件循环结束时被释放
+    void setConnectClosed()     { isClosed_ = true; }
 
 private:
     const size_t MAXBUF = 1024;
@@ -83,12 +87,10 @@ private:
      * 内部中使用
      */
     size_t pos_;
-    
-    /**
-     * @brief 将当前client_fd_对应的连接信息,以 LOG(INFO) 的形式输出
-     */
-    void printConnectionStatus();
 
+    // 当前连接是否关闭
+    bool isClosed_;
+    
     /**
      * @brief 从client_fd_中读取数据至 request_中
      * @return 0 表示读取成功, 其他则表示读取过程存在错误
@@ -126,14 +128,6 @@ private:
      * @return 0 表示成功发送, 其他则表示发送过程存在错误
      */
     ERROR_TYPE handleError(const string& errCode, const string& errMsg);
-
-    /**
-     * @brief 将传入的字符串转义成终端可以直接显示的输出
-     * @param str 待输出的字符串
-     * @return 转义后的字符串
-     * @note  是将 '\r' 等无法在终端上显示的字符,转义成 "\r"字符串 输出
-     */
-    string escapeStr (const string& str);
 };
 
 class MimeType

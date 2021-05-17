@@ -47,10 +47,13 @@ void handlerNewConnections(Epoll* epoll, int listen_fd)
          *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
          *  且每个套接字只会被一个线程处理
          *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
-         *        每个 client_handler 也只会在自己的类成员函数中被释放
+         *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
+         *        可以看出,现在指针已经满天飞了 2333
          */
         HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
         epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+        // 输出相关信息
+        printConnectionStatus(client_fd, "New Connection");
     }
     // accept 的错误处理
     if(errno != EAGAIN)
@@ -80,7 +83,15 @@ void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
     auto handlerConnect = [](void* arg)
     {
         HttpHandler* handler = static_cast<HttpHandler*>(arg);
+        assert(!handler->isConnectClosed());
+
+        int client_fd = handler->getClientFd();
+        printConnectionStatus(client_fd, "New Message");
+
         handler->RunEventLoop();
+
+        if(handler->isConnectClosed())
+            delete handler;
     };
     
     thread_pool->appendTask(handlerConnect, handler);
