@@ -1,4 +1,5 @@
 #include "ThreadPool.h"
+#include "Utils.h"
 
 ThreadPool::ThreadPool(size_t threadNum, ShutdownMode shutdown_mode, size_t maxQueueSize)
         : threadNum_(threadNum),
@@ -101,6 +102,6 @@ void* ThreadPool::TaskForWorkerThreads_(void* arg)
     }
     // 注意: UNREACHABLE, 控制流不可能会到达此处
     // 因为线程的退出不会走这条控制流,而是执行退出事件
-    assert(0 && "TaskForWorkerThreads_ UNREACHABLE!");
+    UNREACHABLE();
     return nullptr;
 }

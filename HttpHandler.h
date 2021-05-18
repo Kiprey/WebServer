@@ -17,7 +17,7 @@ using namespace std;
 class HttpHandler
 {
 public:
-
+    
     /**
      * @brief   显式指定 client fd
      * @param   epoll_fd    epoll 实例相关的描述符
@@ -33,97 +33,163 @@ public:
 
     /**
      * @brief   为当前连接启动事件循环
+     * @return  若当前文件描述符的数据没有处理完成, 则返回 true;
+     *          如果完成了所有的事件,需要被释放时则返回 false
      * @note    在执行事件循环开始之前,一定要设置 client fd
      */ 
-    void RunEventLoop();
+    bool RunEventLoop();
 
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
     Epoll* getEpoll()           { return epoll_; }
 
-    // 判断当前连接是否关闭
-    bool isConnectClosed()      { return isClosed_; }
-    // 关闭当前连接, 该 HttpHandler 实例将在 事件循环结束时被释放
-    void setConnectClosed()     { isClosed_ = true; }
-
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
     static string getWWWPath()          { return www_path; }
 
+    // HttpHandler 内部状态
+    enum STATE_TYPE {
+        STATE_PARSE_URI,          // 解析 HTTP 报文中的第一行, [METHOD URI HTTP_VERSION]
+        STATE_PARSE_HEADER,       // 解析 HTTP header
+        STATE_PARSE_BODY,         // 解析 HTTP body (只针对 POST 请求解析. 注: GET 请求不会解析多余的body)
+        STATE_ANALYSI_REQUEST,    // 解析获取到的整体报文,处理并发送对应的响应报文
+        STATE_FINISHED,           // 当前报文已经解析完毕
+        STATE_ERROR,              // 遇到了错误,丢弃当前进度,继续下一个读取处理循环
+        STATE_FATAL_ERROR        // 遇到了无法恢复的错误,即将断开连接并销毁当前实例
+    };
+    // 获取状态
+    STATE_TYPE getState()   { return state_; }
+
 private:
-    /**
-     *  @brief HttpHandler内部错误 
-     */ 
+
+    // HttpHandler内部错误 
     enum ERROR_TYPE {
         ERR_SUCCESS = 0,                // 无错误
+
         ERR_READ_REQUEST_FAIL,          // 读取请求数据失败
-        ERR_NOT_IMPLEMENTED,            // 不支持一些特定的请求操作,例如 Post
-        ERR_HTTP_VERSION_NOT_SUPPORTED, // 不支持当前客户端的http版本
-        ERR_INTERNAL_SERVER_ERR,        // 程序内部错误
+        ERR_AGAIN,                      // 读取的数据不够,需要等待下一次读取到的数据再来解析
         ERR_CONNECTION_CLOSED,          // 远程连接已关闭
-        ERR_BAD_REQUEST,                // 用户的请求包中存在错误,无法解析  
-        ERR_SEND_RESPONSE_FAIL          // 响应包发送失败
+
+        ERR_SEND_RESPONSE_FAIL,         // 响应包发送失败
+
+        ERR_BAD_REQUEST,                // 用户的请求包中存在错误,无法解析                   400 Bad Request
+        ERR_NOT_FOUND,                  // 目标文件不存在                                 404 Not Found
+        ERR_LENGTH_REQUIRED,            // POST请求中没有 Content-Length 请求头            411 Length Required
+
+        ERR_NOT_IMPLEMENTED,            // 不支持一些特定的请求操作                         501 Not Implemented
+        ERR_INTERNAL_SERVER_ERR,        // 程序内部错误                                   500 Internal Server Error
+        ERR_HTTP_VERSION_NOT_SUPPORTED  // 不支持当前客户端的http版本                       505 HTTP Version Not Supported
     };
 
-    // 当前 HTTP handler 的 www 工作目录
-    static string www_path;
-    const size_t MAXBUF = 1024;
+    // 请求的 HTTP 版本号
+    enum HTTP_VERSION{
+        HTTP_1_0,           // HTTP/1.0
+        HTTP_1_1,           // HTTP/1.1
+        HTTP_UNSUPPORT      // 不支持的HTTP版本
+    };
 
+    // 支持的请求方式
+    enum METHOD_TYPE {
+        METHOD_GET,         // GET 请求
+        METHOD_POST,        // POST 请求
+        METHOD_HEAD         // HEAD 请求,与 GET 处理方式相同,但不返回 body
+    };
+
+    // 当前 HTTP handler 的 www 工作目录, 默认情况下为当前工作目录
+    static string www_path;
+    const size_t MAXBUF = 1024;     // 缓冲区大小
+    const int maxAgainTimes = 10;   // 最多重试次数
+
+    // 相关描述符
     int client_fd_;
     Epoll* epoll_;
     // http 请求包的所有数据
     string request_;
     // http 头部
     unordered_map<string, string> headers_; 
-    
     // 请求方式
-    string method_;
+    METHOD_TYPE method_;
     // 请求路径
     string path_;
     // http版本号
-    string http_version_;
+    HTTP_VERSION http_version_;
+    // 当前handler 状态
+    STATE_TYPE state_;
+    // 重试次数
+    int againTimes_;
+    // http body 数据
+    string http_body_;
+
     // 是否是 `持续连接`
-    // NOTE: 为了防止bug的产生,对于每一个类中的isKeepAlive_来说,
-    //       值只能从 true -> false,而不能再次从 false -> true
     bool isKeepAlive_;
 
-    // 当前解析读入数据的位置
     /** 
-     * NOTE: 该成员变量只在 
+     * @brief 当前解析读入数据的位置
+     * @note 该成员变量只在 
      *      readRequest -> parseURI -> parseHttpHeader -> RunEventLoop 
      * 内部中使用
      */
-    size_t pos_;
+    size_t curr_parse_pos_;
 
-    // 当前连接是否关闭
-    bool isClosed_;
-    
+    /**
+     * @brief 初始化,清空所有数据
+     */
+    void reset();
+
     /**
      * @brief 从client_fd_中读取数据至 request_中
-     * @return 0 表示读取成功, 其他则表示读取过程存在错误
+     * @return ERR_SUCCESS 表示读取成功;
+     *         ERR_AGAIN 表示读取过程中缺失数据,需要等到下次再读
+     *         其他则表示读取过程存在错误
      * @note 内部函数recvn在错误时会产生 errno
      */
     ERROR_TYPE readRequest();
 
     /**
      * @brief 从0位置处解析 请求方式\URI\HTTP版本等
-     * @return 0 表示成功解析, 其他则表示解析过程存在错误
+     * @return ERR_SUCCESS 表示读取成功;
+     *         ERR_AGAIN 表示读取过程中缺失数据,需要等到下次再读
+     *         其他则表示读取过程存在错误
      */
     ERROR_TYPE parseURI();
 
     /**
      * @brief 从request_中的pos位置开始解析 http header
-     * @return 0 表示成功解析, 其他则表示解析过程存在错误
+     * @return ERR_SUCCESS 表示读取成功;
+     *         ERR_AGAIN 表示读取过程中缺失数据,需要等到下次再读
+     *         其他则表示读取过程存在错误
      */
     ERROR_TYPE parseHttpHeader();
     
+    /**
+     * @brief 解析 http body
+     * @return ERR_SUCCESS 表示读取成功;
+     *         ERR_AGAIN 表示读取过程中缺失数据,需要等到下次再读
+     *         不存在其他错误情况
+     */
+    ERROR_TYPE parseBody();
+
+    /**
+     * @brief 处理获取到的完整请求
+     * @return ERR_SUCCESS 表示读取成功;
+     *         其他则表示读取过程存在错误
+     */
+    ERROR_TYPE handleRequest();
+
+    /**
+     * @brief 处理传入的错误类型
+     * @param 错误类型
+     * @return 如果传入 ERR_SUCCESS 则返回 true,否则返回 false
+     */
+    bool handlerErrorType(ERROR_TYPE err);
+
     /**
      * @brief   发送响应报文给客户端
      * @param   responseCode        http 状态码, http报文第二个字段
      * @param   responseMsg         http 报文第三个字段
      * @param   responseBodyType    返回的body类型,即 Content-type
      * @param   responseBody        返回的body内容
-     * @return 0 表示成功发送, 其他则表示发送过程存在错误
+     * @return  ERR_SUCCESS 表示成功发送, 其他则表示发送过程存在错误
      */
     ERROR_TYPE sendResponse(const string& responseCode, const string& responseMsg, 
                       const string& responseBodyType, const string& responseBody);
@@ -132,9 +198,9 @@ private:
      * @brief 发送错误信息至客户端
      * @param errCode   错误http状态码
      * @param errMsg    错误信息, http报文第三个字段
-     * @return 0 表示成功发送, 其他则表示发送过程存在错误
+     * @return ERR_SUCCESS 表示成功发送, 其他则表示发送过程存在错误
      */
-    ERROR_TYPE handleError(const string& errCode, const string& errMsg);
+    ERROR_TYPE sendErrorResponse(const string& errCode, const string& errMsg);
 };
 
 class MimeType

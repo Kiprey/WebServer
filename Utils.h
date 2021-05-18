@@ -21,6 +21,11 @@ using std::ostream;
 #define LOG(x)  logmsg(x)   /* 调用输出函数 */
 std::ostream& logmsg(int flag);
 
+/**
+ * @brief 调试用,表示某个代码区域不应该到达
+ * @param x 可输出的信息
+ */
+#define UNREACHABLE(x) do { assert(0 && "UNREACHABLE: "##x); } while(0)
 
 /**
  * @brief  绑定一个端口号并返回一个 fd

@@ -15,105 +15,118 @@
 #include "Utils.h"
 
 // 声明一下该静态成员变量
-string HttpHandler::www_path;
+ // 如果先前没有设置 www 路径,则设置路径为当前的工作路径
+string HttpHandler::www_path = ".";
 
 HttpHandler::HttpHandler(Epoll* epoll, int fd) 
-    : client_fd_(fd), epoll_(epoll), isClosed_(false)
+    : client_fd_(fd), epoll_(epoll)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
     isKeepAlive_ = true;
-    // 如果先前没有设置 www 路径,则设置路径为当前的工作路径
-    if(www_path.empty())
-        setWWWPath(".");
+    // 初始化一些变量
+    reset();
 }
 
 HttpHandler::~HttpHandler()
 {
+    // 从 epoll 中删除该套接字相关的事件
+    /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
+    epoll_->del(client_fd_);
     // 关闭客户套接字
     LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
     close(client_fd_);
 }
 
+void HttpHandler::reset()
+{
+    // 清除已经处理过的数据
+    assert(request_.length() >= curr_parse_pos_);
+
+    // TODO 这里可能会越界
+    request_ = request_.substr(curr_parse_pos_);
+    curr_parse_pos_ = 0;
+    // 重设状态
+    state_ = STATE_PARSE_URI;
+    // 重置重试次数
+    againTimes_ = 0;
+    // 重置 headers_
+    headers_.clear();
+    // 重置 body
+    http_body_.clear();
+}
+
 HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 {
-    // 清除之前的数据
-    request_.clear();
-    pos_ = 0;
+    LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
 
     char buffer[MAXBUF];
     
-    // 循环非阻塞读取 ------------------------------------------
-    for(;;)
+    // 非阻塞,使用 recv 读取
+    ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
+    if(len < 0)
     {
-        ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
-        if(len < 0)
-        {
-            return ERR_READ_REQUEST_FAIL;
-        }
-        /** 
-         * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
-         * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
-         * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
-         * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
-         * 
-         * 如果读取到的字节数为0,则说明远程连接已经被关闭.
-         */
-        else if(len == 0)
-        {
-            // 对于已经读取完所有数据的这种情况
-            if(request_.length() > 0)
-                // 直接停止读取
-                break;
-            // 如果此时既没读取到数据,之前的 request_也为空,则表示远程连接已经被关闭
-            else
-                return ERR_CONNECTION_CLOSED;
-        }
-        // LOG(INFO) << "Read data: " << buffer << endl;
-
-        // 将读取到的数据组装起来
-        string request(buffer, buffer + len);
-        request_ += request;
-
-        // 由于当前的读取方式为阻塞读取,因此如果读取到的数据已经全部读取完成,则直接返回
-        if(static_cast<size_t>(len) < MAXBUF)
-            break;
+        // 读取时没有出错
+        if(errno == EAGAIN)
+            return ERR_SUCCESS;
+        return ERR_READ_REQUEST_FAIL;
     }
+    /** 
+     * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
+     * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
+     * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
+     * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
+     * 
+     * 如果读取到的字节数为0,则说明远程连接已经被关闭.
+     */
+    else if(len == 0)
+    {
+        // 如果此时没读取到数据,则表示远程连接已经被关闭
+        return ERR_CONNECTION_CLOSED;
+    }
+    // LOG(INFO) << "Read data: " << buffer << endl;
+
+    // 将读取到的数据组装起来
+    string request(buffer, buffer + len);
+    LOG(INFO) << "{" << escapeStr(request, MAXBUF) << "}" << endl;
+
+    request_ += request;
+
     return ERR_SUCCESS;
 }
 
 HttpHandler::ERROR_TYPE HttpHandler::parseURI()
 {
-    if(request_.empty())   return ERR_BAD_REQUEST;
+    if(request_.empty())   return ERR_AGAIN;
 
     size_t pos1, pos2;
     
     pos1 = request_.find("\r\n");
-    if(pos1 == string::npos)    return ERR_BAD_REQUEST;
+    if(pos1 == string::npos)    return ERR_AGAIN;
     string&& first_line = request_.substr(0, pos1);
     // a. 查找get
     pos1 = first_line.find(' ');
     if(pos1 == string::npos)    return ERR_BAD_REQUEST;
-    method_ = first_line.substr(0, pos1);
+    string methodStr = first_line.substr(0, pos1);
 
     string output_method = "Method: ";
-    if(method_ == "GET")
-        output_method += "GET";
+    if(methodStr == "GET")
+        method_ = METHOD_GET;
+    else if(methodStr == "POST")
+        method_ = METHOD_POST;
+    else if(methodStr == "HEAD")
+        method_ = METHOD_HEAD;
     else
         return ERR_NOT_IMPLEMENTED;
-    LOG(INFO) << output_method << endl;
+    LOG(INFO) << "Method: " << methodStr << endl;
 
     // b. 查找目标路径
     pos1++;
     pos2 = first_line.find(' ', pos1);
     if(pos2 == string::npos)    return ERR_BAD_REQUEST;
 
-    // 获取path时,注意去除 path 中的第一个斜杠
-    pos1++;
-    path_ = first_line.substr(pos1, pos2 - pos1);
-    // 如果 path 为空,则添加一个 . 表示当前文件夹
-    if(path_.length() == 0)
-        path_ += ".";
+    // 获取path时,注意加上 www path
+    path_ = www_path + first_line.substr(pos1, pos2 - pos1);
     
     // 判断目标路径是否是文件夹
     struct stat st;
@@ -127,39 +140,44 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
     LOG(INFO) << "Path: " << path_ << endl;
 
     // c. 查看HTTP版本
-    // NOTE 这里只支持 HTTP/1.0 和 HTTP/1.1
     pos2++;
-    http_version_ = first_line.substr(pos2, first_line.length() - pos2);
-    LOG(INFO) << "HTTP Version: " << http_version_ << endl;
+    string http_version_str = first_line.substr(pos2, first_line.length() - pos2);
+    LOG(INFO) << "HTTP Version: " << http_version_str << endl;
 
     // 检测是否支持客户端 http 版本
-    if(http_version_ != "HTTP/1.0" && http_version_ != "HTTP/1.1")
+    if(http_version_str == "HTTP/1.0")
+        http_version_ = HTTP_1_0;
+    else if (http_version_str == "HTTP/1.1")
+        http_version_ = HTTP_1_1;
+    else
         return ERR_HTTP_VERSION_NOT_SUPPORTED;
-    // 设置只在 HTTP/1.1时 允许 持续连接
-    if(http_version_ != "HTTP/1.1")
-        isKeepAlive_ = false;
 
-    // 更新pos_
-    pos_ = first_line.length() + 2;
+    // 更新curr_parse_pos_
+    curr_parse_pos_ += first_line.length() + 2;
     return ERR_SUCCESS;
 }
 
 HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
 {
-    // 清除之前的 http header
-    headers_.clear();
+    LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
 
     size_t pos1, pos2;
-    for(pos1 = pos_;
+    for(pos1 = curr_parse_pos_;
         (pos2 = request_.find("\r\n", pos1)) != string::npos;
         pos1 = pos2 + 2)
     {
         string&& header = request_.substr(pos1, pos2 - pos1);
         // 如果遍历到了空头,则表示http header部分结束
         if(header.size() == 0)
-            break;
+        {
+            curr_parse_pos_ = pos1 + 2;
+            return ERR_SUCCESS;
+        }
         pos1 = header.find(' ');
+
         if(pos1 == string::npos)    return ERR_BAD_REQUEST;
+        if(header[pos1 - 1] != ':') return ERR_BAD_REQUEST;
+
         // key处减去1是为了消除key里的最后一个冒号字符
         string&& key = header.substr(0, pos1 - 1);
         // key 转小写
@@ -171,137 +189,64 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
 
         headers_[key] = value;
     }
+    // // 判断处理空 header 条目的 \r\n
+    // if((request_.size() < pos1 + 2) || (request_.substr(pos1, 2) != "\r\n"))
+    //     return ERR_BAD_REQUEST;
+
+    // 执行到这里说明: 没有遍历到空头,即还有数据没有读完
+    return ERR_AGAIN;
+}
+
+HttpHandler::ERROR_TYPE HttpHandler::parseBody()
+{
+    assert(method_ == METHOD_POST);
+    
+    auto content_len_iter = headers_.find("content-length");
+    if(content_len_iter == headers_.end())
+        return ERR_LENGTH_REQUIRED;
+
+    string len_str = content_len_iter->second;
+    if(!isNumericStr(len_str))
+        return ERR_BAD_REQUEST;
+
+    int len = atoi(len_str.c_str());
+
+    // TODO 偏移量要算一下
+    if(request_.length() < curr_parse_pos_ + len)
+        return ERR_AGAIN;
+    http_body_ = request_.substr(curr_parse_pos_, len);
+
+    // 输出剩余的 HTTP body
+    LOG(INFO) << "HTTP Body: {" << escapeStr(http_body_, MAXBUF) << "}" << endl;
+
+    return ERR_SUCCESS;    
+}
+
+HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
+{
+    // 设置只在 HTTP/1.1时 默认允许 持续连接
+    if(http_version_ == HTTP_1_0)
+        isKeepAlive_ = false;
+
     // 获取header完成后,处理一下 Connection 头
     auto conHeaderIter = headers_.find("connection");
     if(conHeaderIter != headers_.end())
     {
         string value = conHeaderIter->second;
         transform(value.begin(), value.end(), value.begin(), ::tolower);
-        if(value != "keep-alive")
-            isKeepAlive_ = false;
+        if(value == "keep-alive")
+            isKeepAlive_ = true;
     }
-    // 判断处理空 header 条目的 \r\n
-    if((request_.size() < pos1 + 2) || (request_.substr(pos1, 2) != "\r\n"))
-        return ERR_BAD_REQUEST;
 
-    pos_ = pos1 + 2;
-    return ERR_SUCCESS;
-}
-
-
-
-HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, const string& responseMsg, 
-                            const string& responseBodyType, const string& responseBody)
-{
-    stringstream sstream;
-    sstream << "HTTP/1.1" << " " << responseCode << " " << responseMsg << "\r\n";
-    sstream << "Connection: " << (isKeepAlive_ ? "Keep-Alive" : "Close") << "\r\n";
-    sstream << "Server: WebServer/1.0" << "\r\n";
-    sstream << "Content-length: " << responseBody.size() << "\r\n";
-    sstream << "Content-type: " << responseBodyType << "\r\n";
-    sstream << "\r\n";
-    sstream << responseBody;
-
-    string&& response = sstream.str();
-    ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
-
-    // 输出返回的数据
-    LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
-    LOG(INFO) << "{" << escapeStr(response, MAXBUF) << "}" << endl;
-
-    if(len < 0 || static_cast<size_t>(len) != response.size())
-        return ERR_SEND_RESPONSE_FAIL;
-    return ERR_SUCCESS;
-}
-
-HttpHandler::ERROR_TYPE HttpHandler::handleError(const string& errCode, const string& errMsg)
-{
-    string errStr = errCode + " " + errMsg;
-    string responseBody = 
-                "<html>"
-                "<title>" + errStr + "</title>"
-                "<body>" + errStr + 
-                    "<hr><em> Kiprey's Web Server</em>"
-                "</body>"
-                "</html>";
-    return sendResponse(errCode, errMsg, "text/html", responseBody);
-}
-
-void HttpHandler::RunEventLoop()
-{
-    ERROR_TYPE err_ty;
-
-    // 持续连接
-    while(isKeepAlive_)
+    if(method_ == METHOD_GET || method_ == METHOD_HEAD)
     {
-        LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
-        // 从socket读取请求数据, 如果读取失败,或者断开连接
-        // NOTE 这里的 readRequest 必须完整读取整个 http 报文
-        if((err_ty = readRequest()) != ERR_SUCCESS)
-        {
-            if(err_ty == ERR_READ_REQUEST_FAIL)
-                LOG(ERROR) << "Read request failed ! " << strerror(errno) << endl;
-            else if(err_ty == ERR_CONNECTION_CLOSED)
-                LOG(INFO) << "Socket(" << client_fd_ << ") was closed." << endl;
-            else
-                assert(0 && "UNREACHABLE");       
-            // 断开连接     
-            break;
-        }
-        LOG(INFO) << "{" << escapeStr(request_, MAXBUF) << "}" << endl;
-        
-        // 解析信息 ------------------------------------------
-        LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
-
-        // 1. 先解析第一行
-        if((err_ty = parseURI()) != ERR_SUCCESS)
-        {
-            if(err_ty == ERR_NOT_IMPLEMENTED)
-            {
-                LOG(ERROR) << "Request method is not implemented." << endl;
-                handleError("501", "Not Implemented");
-            }
-            else if(err_ty == ERR_HTTP_VERSION_NOT_SUPPORTED)
-            {
-                LOG(ERROR) << "Request HTTP Version Not Supported." << endl;
-                handleError("505", "HTTP Version Not Supported");
-            }
-            else if(err_ty == ERR_BAD_REQUEST)
-            {
-                LOG(ERROR) << "Bad Request." << endl;
-                handleError("400", "Bad Request");
-            }
-            else
-                assert(0 && "UNREACHABLE"); 
-            continue;
-        }
-        // 2. 解析每一条http header
-        if((err_ty = parseHttpHeader()) != ERR_SUCCESS)
-        {
-            if(err_ty == ERR_BAD_REQUEST)
-            {
-                LOG(ERROR) << "Bad Request." << endl;
-                handleError("400", "Bad Request");
-            }
-            else
-                assert(0 && "UNREACHABLE"); 
-            continue;
-        }
-        // 3. 输出剩余的 HTTP body
-        LOG(INFO) << "HTTP Body: {" 
-                << escapeStr(request_.substr(pos_, request_.length() - pos_), MAXBUF) 
-                << "}" << endl;
-
-        // 发送目标数据 ------------------------------------------
-
         // 试图打开一个文件
         int file_fd;
         if((file_fd = open(path_.c_str(), O_RDONLY, 0)) == -1)
         {
             // 如果打开失败,则返回404
             LOG(ERROR) << "File [" << path_ << "] open failed ! " << strerror(errno) << endl;
-            handleError("404", "Not Found"); 
-            continue;
+            return ERR_NOT_FOUND;
         }  
         else
         {
@@ -310,8 +255,7 @@ void HttpHandler::RunEventLoop()
             if(stat(path_.c_str(), &st) == -1)
             {
                 LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << endl;
-                handleError("500", "Internal Server Error");
-                continue;
+                return ERR_INTERNAL_SERVER_ERR;
             }
             // 读取文件, 使用 mmap 来高速读取文件
             void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
@@ -321,8 +265,7 @@ void HttpHandler::RunEventLoop()
             if(addr == MAP_FAILED)
             {
                 LOG(ERROR) << "Can not map file [" << path_ << "] -> mem ! " << endl;
-                handleError("500", "Internal Server Error");
-                continue;
+                return ERR_INTERNAL_SERVER_ERR;
             }
             // 将数据从内存页存入至 responseBody
             char* file_data_ptr = static_cast<char*>(addr);
@@ -338,9 +281,176 @@ void HttpHandler::RunEventLoop()
             while((dot_pos = suffix.find('.')) != string::npos)
                 suffix = suffix.substr(dot_pos + 1);
 
-            // 发送数据
+            // 发送数据, 在该函数内部, METHOD_HEAD 不发送 http body
             if(sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody) != ERR_SUCCESS)
+            {
                 LOG(ERROR) << "Send Response failed !" << endl;
+                return ERR_SEND_RESPONSE_FAIL;
+            }
         }
     }
+    else if(method_ == METHOD_POST)
+    {
+
+    }
+    else
+        return ERR_INTERNAL_SERVER_ERR;
+    
+    return ERR_SUCCESS;
+}
+
+bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
+{
+    // 除了 ERR_SUCESS 和 ERR_AGAIN 没有设置 state 以外, 其他 case 都设置了 state_
+    bool isSuccess = false;
+    switch(err)
+    {
+    case ERR_SUCCESS:
+        isSuccess = true;
+        /* 注意这里没有设置 STATE */
+        break;
+    case ERR_READ_REQUEST_FAIL:
+        LOG(ERROR) << "HTTP Read request failed ! " << strerror(errno) << endl;
+        state_ = STATE_FATAL_ERROR;
+        break;
+    case ERR_AGAIN:
+        ++againTimes_;
+        LOG(INFO) << "HTTP need read once again ! " << endl;
+        /* 注意这里没有设置 STATE , 与 ERR_SUCESS一样 */
+        if(againTimes_ > maxAgainTimes)
+        {
+            state_ = STATE_FATAL_ERROR;
+            LOG(ERROR) << "Reach max read times" << endl;
+        }
+        break;
+    case ERR_CONNECTION_CLOSED:
+        LOG(INFO) << "HTTP Socket(" << client_fd_ << ") was closed." << endl;
+        state_ = STATE_FATAL_ERROR;
+        break;
+    case ERR_SEND_RESPONSE_FAIL:
+        LOG(ERROR) << "Send Response failed !" << endl;
+        state_ = STATE_ERROR;
+        break;
+    case ERR_BAD_REQUEST:
+        LOG(ERROR) << "HTTP Bad Request." << endl;
+        sendErrorResponse("400", "Bad Request");
+        state_ = STATE_ERROR;
+        break;
+    case ERR_NOT_FOUND:
+        LOG(ERROR) << "HTTP Not Found." << endl;
+        sendErrorResponse("404", "Not Found");
+        state_ = STATE_ERROR;
+        break;
+    case ERR_LENGTH_REQUIRED:
+        LOG(ERROR) << "HTTP Length Required." << endl;
+        sendErrorResponse("411", "Length Required");
+        state_ = STATE_ERROR;
+        break;
+
+    case ERR_NOT_IMPLEMENTED:
+        LOG(ERROR) << "HTTP Request method is not implemented." << endl;
+        sendErrorResponse("501", "Not Implemented");
+        state_ = STATE_ERROR;
+        break;
+    case ERR_INTERNAL_SERVER_ERR:
+
+        break;
+    case ERR_HTTP_VERSION_NOT_SUPPORTED:
+        LOG(ERROR) << "HTTP Request HTTP Version Not Supported." << endl;
+        sendErrorResponse("505", "HTTP Version Not Supported");
+        state_ = STATE_ERROR;
+        break;
+    default:
+        UNREACHABLE();
+    }
+    return isSuccess;
+}
+
+HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, const string& responseMsg, 
+                            const string& responseBodyType, const string& responseBody)
+{
+    stringstream sstream;
+    sstream << "HTTP/1.1" << " " << responseCode << " " << responseMsg << "\r\n";
+    sstream << "Connection: " << (isKeepAlive_ ? "Keep-Alive" : "Close") << "\r\n";
+    sstream << "Server: WebServer/1.0" << "\r\n";
+    sstream << "Content-length: " << responseBody.size() << "\r\n";
+    sstream << "Content-type: " << responseBodyType << "\r\n";
+    sstream << "\r\n";
+    // 如果是 HEAD 请求,则不发送 http body
+    if(method_ != METHOD_HEAD)
+        sstream << responseBody;
+
+    string&& response = sstream.str();
+    ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
+
+    // 输出返回的数据
+    LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
+    LOG(INFO) << "{" << escapeStr(response, MAXBUF) << "}" << endl;
+
+    if(len < 0 || static_cast<size_t>(len) != response.size())
+        return ERR_SEND_RESPONSE_FAIL;
+    return ERR_SUCCESS;
+}
+
+HttpHandler::ERROR_TYPE HttpHandler::sendErrorResponse(const string& errCode, const string& errMsg)
+{
+    string errStr = errCode + " " + errMsg;
+    string responseBody = 
+                "<html>"
+                "<title>" + errStr + "</title>"
+                "<body>" + errStr + 
+                    "<hr><em> Kiprey's Web Server</em>"
+                "</body>"
+                "</html>";
+    return sendResponse(errCode, errMsg, "text/html", responseBody);
+}
+
+bool HttpHandler::RunEventLoop()
+{
+    while(true)
+    {
+        // 从socket读取请求数据, 如果读取失败,或者断开连接
+        if(!handlerErrorType(readRequest()))
+            break;
+        
+        // 解析信息 ------------------------------------------
+        // 1. 先解析第一行
+        if(state_ == STATE_PARSE_URI && handlerErrorType(parseURI()))
+            state_ = STATE_PARSE_HEADER;
+        // 2. 解析每一条http header
+        if(state_ == STATE_PARSE_HEADER && handlerErrorType(parseHttpHeader()))
+            state_ = STATE_PARSE_BODY;
+        // 3. 对于 post 解析 http body
+        if(state_ == STATE_PARSE_BODY)
+        {
+            if(method_ != METHOD_POST || handlerErrorType(parseBody()))
+                state_ = STATE_ANALYSI_REQUEST;
+        }
+        // 4. 开始处理数据
+        if(state_ == STATE_ANALYSI_REQUEST && handlerErrorType(handleRequest()))
+            state_ = STATE_FINISHED;
+
+        // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
+        if(state_ == STATE_ERROR || state_ == STATE_FINISHED)
+        {
+            // 如果 keep Alive, 则重置状态
+            if(isKeepAlive_)
+            {
+                // 重新开始,处理剩余没有处理的字符串
+                state_ = STATE_PARSE_URI;
+                reset();
+            }
+            // 否则关闭当前连接
+            else
+                return false;
+        }
+        // 如果是致命错误,则直接返回 false
+        else if(state_ == STATE_FATAL_ERROR)
+            return false;
+        // 其他状态下则表示需要更多数据,因此重新放入 epoll 中
+        else
+            epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    }
+    UNREACHABLE();
+    return true;
 }
