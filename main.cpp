@@ -22,39 +22,41 @@ void handlerNewConnections(Epoll* epoll, int listen_fd)
     sockaddr_in client_addr;
     socklen_t client_addr_len = 0;
     int client_fd = -1;
+    
     /**
      *  如果 
      *      1. accept 没有发生错误
      *      2. accppt 发生了 EINTR 错误
      *      3. accept 发生了 ECONNABORTED 错误(该错误是远程连接被中断)
-     *  则重新循环
+     *  则重新循环. 其中第三点, 若发生了 aborted 错误,则继续循环接受下一个socket 的请求
      */
-    while((client_fd = accept(listen_fd, (sockaddr*)&client_addr, &client_addr_len)) != -1
-            || (errno == EINTR)
-            || (errno == ECONNABORTED))
-    {
-        // 设置 client_fd 非阻塞
-        if(!setSocketNoBlock(client_fd))
+    do{
+        while((client_fd = accept(listen_fd, (sockaddr*)&client_addr, &client_addr_len)) != -1)
         {
-            LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
-                        << strerror(errno) << endl;
-            // 如果报错,注意关闭 client_fd
-            /// TODO: 关闭 client_fd 之前, 发送一个 500 错误?
-            close(client_fd);
-            continue;
+            // 设置 client_fd 非阻塞
+            if(!setSocketNoBlock(client_fd))
+            {
+                LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
+                            << strerror(errno) << endl;
+                // 如果报错,注意关闭 client_fd
+                /// TODO: 关闭 client_fd 之前, 发送一个 500 错误?
+                close(client_fd);
+                continue;
+            }
+            /** 构建一个新的 HttpHandler,并放入 epoll 实例中
+             *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
+             *  且每个套接字只会被一个线程处理
+             *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
+             *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
+             *        可以看出,现在指针已经满天飞了 2333
+             */
+            HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
+            epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            // 输出相关信息
+            printConnectionStatus(client_fd, "New Connection");
         }
-        /** 构建一个新的 HttpHandler,并放入 epoll 实例中
-         *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
-         *  且每个套接字只会被一个线程处理
-         *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
-         *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
-         *        可以看出,现在指针已经满天飞了 2333
-         */
-        HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
-        epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
-        // 输出相关信息
-        printConnectionStatus(client_fd, "New Connection");
-    }
+    }while(errno == EINTR || errno == ECONNABORTED);
+    
     // accept 的错误处理
     if(errno != EAGAIN)
         LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
@@ -160,6 +162,9 @@ int main(int argc, char* argv[])
                 abort();
             }
         }
+        // 如果什么也没读到,则可能是因为 signal 导致的.例如 SIGINT XD
+        else if(event_num == 0)
+            continue;
         
         // 遍历获取到的事件
         for(int i = 0; i < event_num; i++)
