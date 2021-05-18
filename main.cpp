@@ -83,14 +83,12 @@ void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
     auto handlerConnect = [](void* arg)
     {
         HttpHandler* handler = static_cast<HttpHandler*>(arg);
-        assert(!handler->isConnectClosed());
 
         int client_fd = handler->getClientFd();
         printConnectionStatus(client_fd, "New Message");
 
-        handler->RunEventLoop();
-
-        if(handler->isConnectClosed())
+        // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
+        if(!(handler->RunEventLoop()))
             delete handler;
     };
     
@@ -100,7 +98,8 @@ void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
 int main(int argc, char* argv[])
 {
     // 获取传入的参数
-    if (argc < 2) {
+    if (argc < 2 || !isNumericStr(argv[1])) 
+    {
         LOG(ERROR) << "usage: " << argv[0] << " <port> [<www_dir>]" << endl;
         exit(EXIT_FAILURE);
     }

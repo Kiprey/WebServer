@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <cctype>
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -215,4 +216,12 @@ string escapeStr(const string& str, size_t MAXBUF)
         return msg.substr(0, MAXBUF) + " ... ... ";
     else
         return msg;
+}
+
+bool isNumericStr(string str)
+{
+    for(size_t i = 0; i < str.length(); i++)
+        if(!isdigit(str[i]))
+            return false;
+    return true;
 }

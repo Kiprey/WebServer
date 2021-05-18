@@ -98,4 +98,10 @@ void printConnectionStatus(int client_fd_, string prefix);
  */
 string escapeStr(const string& str, size_t MAXBUF);
 
+/**
+ * @brief 判断字符串是否全为数字
+ * @return true 表示字符串全为数字, 否则返回false
+ */
+bool isNumericStr(string str);
+
 #endif
