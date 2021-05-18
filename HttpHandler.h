@@ -3,7 +3,6 @@
 
 #include <iostream>
 #include <map>
-#include <unordered_map>
 
 #include "Epoll.h"
 
@@ -106,7 +105,7 @@ private:
     // http 请求包的所有数据
     string request_;
     // http 头部
-    unordered_map<string, string> headers_; 
+    map<string, string> headers_; 
     // 请求方式
     METHOD_TYPE method_;
     // 请求路径

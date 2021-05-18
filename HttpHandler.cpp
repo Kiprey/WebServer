@@ -19,7 +19,7 @@
 string HttpHandler::www_path = ".";
 
 HttpHandler::HttpHandler(Epoll* epoll, int fd) 
-    : client_fd_(fd), epoll_(epoll)
+    : client_fd_(fd), epoll_(epoll), curr_parse_pos_(0)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
@@ -97,8 +97,6 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 
 HttpHandler::ERROR_TYPE HttpHandler::parseURI()
 {
-    if(request_.empty())   return ERR_AGAIN;
-
     size_t pos1, pos2;
     
     pos1 = request_.find("\r\n");
@@ -282,11 +280,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
                 suffix = suffix.substr(dot_pos + 1);
 
             // 发送数据, 在该函数内部, METHOD_HEAD 不发送 http body
-            if(sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody) != ERR_SUCCESS)
-            {
-                LOG(ERROR) << "Send Response failed !" << endl;
-                return ERR_SEND_RESPONSE_FAIL;
-            }
+            return sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
         }
     }
     else if(method_ == METHOD_POST)
@@ -411,7 +405,8 @@ bool HttpHandler::RunEventLoop()
     {
         // 从socket读取请求数据, 如果读取失败,或者断开连接
         if(!handlerErrorType(readRequest()))
-            break;
+            // 直接断开连接
+            return false;
         
         // 解析信息 ------------------------------------------
         // 1. 先解析第一行
@@ -435,11 +430,7 @@ bool HttpHandler::RunEventLoop()
         {
             // 如果 keep Alive, 则重置状态
             if(isKeepAlive_)
-            {
-                // 重新开始,处理剩余没有处理的字符串
-                state_ = STATE_PARSE_URI;
                 reset();
-            }
             // 否则关闭当前连接
             else
                 return false;
