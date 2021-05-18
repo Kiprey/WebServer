@@ -346,14 +346,14 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
         sendErrorResponse("411", "Length Required");
         state_ = STATE_ERROR;
         break;
-
     case ERR_NOT_IMPLEMENTED:
         LOG(ERROR) << "HTTP Request method is not implemented." << endl;
         sendErrorResponse("501", "Not Implemented");
         state_ = STATE_ERROR;
         break;
     case ERR_INTERNAL_SERVER_ERR:
-
+        sendErrorResponse("500", "Internal Server Error");
+        state_ = STATE_ERROR;
         break;
     case ERR_HTTP_VERSION_NOT_SUPPORTED:
         LOG(ERROR) << "HTTP Request HTTP Version Not Supported." << endl;
