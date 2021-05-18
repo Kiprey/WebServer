@@ -6,14 +6,12 @@
 
 Epoll::Epoll(int flag) : epoll_fd_(-1)
 {
-    events_ = new epoll_event[MAX_EVENTS];
     create(flag);
 }
 
 Epoll::~Epoll()
 {
     destroy();
-    delete[] events_;
 }
 
 bool Epoll::isEpollValid()

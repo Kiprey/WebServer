@@ -79,10 +79,10 @@ public:
     epoll_event getEvent(size_t index);
 
 private:
-    const size_t MAX_EVENTS = 1024;
+    static const size_t MAX_EVENTS = 1024;
 
     int epoll_fd_;
-    epoll_event *events_;
+    epoll_event events_[MAX_EVENTS];
 };
 
 #endif
