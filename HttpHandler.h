@@ -180,7 +180,7 @@ private:
      * @param 错误类型
      * @return 如果传入 ERR_SUCCESS 则返回 true,否则返回 false
      */
-    bool handlerErrorType(ERROR_TYPE err);
+    bool handleErrorType(ERROR_TYPE err);
 
     /**
      * @brief   发送响应报文给客户端

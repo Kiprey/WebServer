@@ -293,7 +293,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
     return ERR_SUCCESS;
 }
 
-bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
+bool HttpHandler::handleErrorType(HttpHandler::ERROR_TYPE err)
 {
     // 除了 ERR_SUCESS 和 ERR_AGAIN 没有设置 state 以外, 其他 case 都设置了 state_
     bool isSuccess = false;
@@ -402,25 +402,25 @@ HttpHandler::ERROR_TYPE HttpHandler::sendErrorResponse(const string& errCode, co
 bool HttpHandler::RunEventLoop()
 {
     // 从socket读取请求数据, 如果读取失败,或者断开连接
-    if(!handlerErrorType(readRequest()))
+    if(!handleErrorType(readRequest()))
         // 直接断开连接
         return false;
     
     // 解析信息 ------------------------------------------
     // 1. 先解析第一行
-    if(state_ == STATE_PARSE_URI && handlerErrorType(parseURI()))
+    if(state_ == STATE_PARSE_URI && handleErrorType(parseURI()))
         state_ = STATE_PARSE_HEADER;
     // 2. 解析每一条http header
-    if(state_ == STATE_PARSE_HEADER && handlerErrorType(parseHttpHeader()))
+    if(state_ == STATE_PARSE_HEADER && handleErrorType(parseHttpHeader()))
         state_ = STATE_PARSE_BODY;
     // 3. 对于 post 解析 http body
     if(state_ == STATE_PARSE_BODY)
     {
-        if(method_ != METHOD_POST || handlerErrorType(parseBody()))
+        if(method_ != METHOD_POST || handleErrorType(parseBody()))
             state_ = STATE_ANALYSI_REQUEST;
     }
     // 4. 开始处理数据
-    if(state_ == STATE_ANALYSI_REQUEST && handlerErrorType(handleRequest()))
+    if(state_ == STATE_ANALYSI_REQUEST && handleErrorType(handleRequest()))
         state_ = STATE_FINISHED;
 
     // 开始处理当前状态

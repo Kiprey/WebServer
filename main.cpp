@@ -16,7 +16,7 @@ using namespace std;
  * @param epoll     存放新连接的Epoll类实例 
  * @param listen_fd 新连接所对应的 listen 描述符
  */ 
-void handlerNewConnections(Epoll* epoll, int listen_fd)
+void handleNewConnections(Epoll* epoll, int listen_fd)
 {
     // 注意:可能会有很多个 connect 动作,但只会有一个 event
     sockaddr_in client_addr;
@@ -67,7 +67,7 @@ void handlerNewConnections(Epoll* epoll, int listen_fd)
  * @param thread_pool   目标线程池
  * @param event         待处理的事件
  */
-void handlerOldConnection(ThreadPool* thread_pool, epoll_event* event)
+void handleOldConnection(ThreadPool* thread_pool, epoll_event* event)
 {
     HttpHandler* handler = static_cast<HttpHandler*>(event->data.ptr);
     // 处理一些错误事件
@@ -176,9 +176,9 @@ int main(int argc, char* argv[])
             
             // 如果当前文件描述符是 listen_fd, 则建立连接
             if(fd == listen_fd)
-                handlerNewConnections(&epoll, listen_fd);
+                handleNewConnections(&epoll, listen_fd);
             else
-                handlerOldConnection(&thread_pool, &event);
+                handleOldConnection(&thread_pool, &event);
         }
     }
     delete listen_handler;
