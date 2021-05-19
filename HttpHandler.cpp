@@ -39,18 +39,12 @@ HttpHandler::~HttpHandler()
     close(client_fd_);
 }
 
-void HttpHandler::reset(bool discardReq)
+void HttpHandler::reset()
 {
     // 清除已经处理过的数据
     assert(request_.length() >= curr_parse_pos_);
 
-    if(discardReq)
-        request_.clear();
-    else
-        // 为什么reset时要获取剩余字符串而不是全部清空
-        // 因为有可能一次性收到了两个连续的 http request 
-        // 处理完第一个后,要接着处理第二个
-        request_ = request_.substr(curr_parse_pos_);
+    request_.clear();
     curr_parse_pos_ = 0;
     // 重设状态
     state_ = STATE_PARSE_URI;
@@ -334,7 +328,7 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
     case ERR_BAD_REQUEST:
         LOG(ERROR) << "HTTP Bad Request." << endl;
         sendErrorResponse("400", "Bad Request");
-        state_ = STATE_ERROR_DISCARD_REQ;
+        state_ = STATE_ERROR;
         break;
     case ERR_NOT_FOUND:
         LOG(ERROR) << "HTTP Not Found." << endl;
@@ -344,21 +338,21 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
     case ERR_LENGTH_REQUIRED:
         LOG(ERROR) << "HTTP Length Required." << endl;
         sendErrorResponse("411", "Length Required");
-        state_ = STATE_ERROR_DISCARD_REQ;
+        state_ = STATE_ERROR;
         break;
     case ERR_NOT_IMPLEMENTED:
         LOG(ERROR) << "HTTP Request method is not implemented." << endl;
         sendErrorResponse("501", "Not Implemented");
-        state_ = STATE_ERROR_DISCARD_REQ;
+        state_ = STATE_ERROR;
         break;
     case ERR_INTERNAL_SERVER_ERR:
         sendErrorResponse("500", "Internal Server Error");
-        state_ = STATE_ERROR_DISCARD_REQ;
+        state_ = STATE_ERROR;
         break;
     case ERR_HTTP_VERSION_NOT_SUPPORTED:
         LOG(ERROR) << "HTTP Request HTTP Version Not Supported." << endl;
         sendErrorResponse("505", "HTTP Version Not Supported");
-        state_ = STATE_ERROR_DISCARD_REQ;
+        state_ = STATE_ERROR;
         break;
     default:
         UNREACHABLE();
@@ -407,59 +401,45 @@ HttpHandler::ERROR_TYPE HttpHandler::sendErrorResponse(const string& errCode, co
 
 bool HttpHandler::RunEventLoop()
 {
-    while(true)
+    // 从socket读取请求数据, 如果读取失败,或者断开连接
+    if(!handlerErrorType(readRequest()))
+        // 直接断开连接
+        return false;
+    
+    // 解析信息 ------------------------------------------
+    // 1. 先解析第一行
+    if(state_ == STATE_PARSE_URI && handlerErrorType(parseURI()))
+        state_ = STATE_PARSE_HEADER;
+    // 2. 解析每一条http header
+    if(state_ == STATE_PARSE_HEADER && handlerErrorType(parseHttpHeader()))
+        state_ = STATE_PARSE_BODY;
+    // 3. 对于 post 解析 http body
+    if(state_ == STATE_PARSE_BODY)
     {
-        // 从socket读取请求数据, 如果读取失败,或者断开连接
-        if(!handlerErrorType(readRequest()))
-            // 直接断开连接
-            return false;
-        
-        // 解析信息 ------------------------------------------
-        // 1. 先解析第一行
-        if(state_ == STATE_PARSE_URI && handlerErrorType(parseURI()))
-            state_ = STATE_PARSE_HEADER;
-        // 2. 解析每一条http header
-        if(state_ == STATE_PARSE_HEADER && handlerErrorType(parseHttpHeader()))
-            state_ = STATE_PARSE_BODY;
-        // 3. 对于 post 解析 http body
-        if(state_ == STATE_PARSE_BODY)
-        {
-            if(method_ != METHOD_POST || handlerErrorType(parseBody()))
-                state_ = STATE_ANALYSI_REQUEST;
-        }
-        // 4. 开始处理数据
-        if(state_ == STATE_ANALYSI_REQUEST && handlerErrorType(handleRequest()))
-            state_ = STATE_FINISHED;
-
-        // 开始处理当前状态
-        switch(state_)
-        {
-        // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
-        case STATE_ERROR:
-        case STATE_ERROR_DISCARD_REQ:
-        case STATE_FINISHED:
-            // 如果 keep Alive, 则重置状态
-            // 对于那些必须丢弃所有接收数据才可恢复的错误,执行丢弃操作
-            if(isKeepAlive_)
-            {
-                reset(state_ == STATE_ERROR_DISCARD_REQ);
-                // 重新开始循环
-                break;
-            }
-            // 否则,既然已经发生了错误 / 完成了请求,则直接销毁当前实例
-            /* fall through */
-
-        // 如果是致命错误,则直接返回 false
-        case STATE_FATAL_ERROR:
-            return false;
-
-        // 其他状态下则表示需要更多数据,因此重新放入 epoll 中
-        default:
-            bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
-            assert(ret);
-            return true;
-        }
+        if(method_ != METHOD_POST || handlerErrorType(parseBody()))
+            state_ = STATE_ANALYSI_REQUEST;
     }
-    UNREACHABLE();
+    // 4. 开始处理数据
+    if(state_ == STATE_ANALYSI_REQUEST && handlerErrorType(handleRequest()))
+        state_ = STATE_FINISHED;
+
+    // 开始处理当前状态
+    // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
+    if(state_ == STATE_ERROR || state_ == STATE_FINISHED)
+    {
+        // 如果 keep Alive, 则重置状态, 并跳出 if 到最后的return 处重新放入 epoll 中
+        if(isKeepAlive_)
+            reset();
+        else 
+            // 否则,既然已经发生了错误 / 完成了请求,则直接销毁当前实例
+            return false;
+    }
+    // 如果是致命错误,则直接返回 false
+    else if(state_ == STATE_FATAL_ERROR)
+        return false;
+
+    // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
+    bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    assert(ret);
     return true;
 }
