@@ -18,6 +18,7 @@ using std::ostream;
  */
 #define INFO    1           /* 普通输出 */
 #define ERROR   2           /* 错误输出 */
+// #define LOG(x)  ostream(nullptr)
 #define LOG(x)  logmsg(x)   /* 调用输出函数 */
 std::ostream& logmsg(int flag);
 
