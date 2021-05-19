@@ -323,7 +323,7 @@ bool HttpHandler::handleErrorType(HttpHandler::ERROR_TYPE err)
         break;
     case ERR_SEND_RESPONSE_FAIL:
         LOG(ERROR) << "Send Response failed !" << endl;
-        state_ = STATE_ERROR;
+        state_ = STATE_FATAL_ERROR;
         break;
     case ERR_BAD_REQUEST:
         LOG(ERROR) << "HTTP Bad Request." << endl;
