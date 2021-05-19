@@ -51,7 +51,8 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
              *        可以看出,现在指针已经满天飞了 2333
              */
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
-            epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            bool ret = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            assert(ret);
             // 输出相关信息
             printConnectionStatus(client_fd, "New Connection");
         }
@@ -149,8 +150,10 @@ int main(int argc, char* argv[])
         // 阻塞等待新的事件
         int event_num = epoll.wait(-1);
         // 如果报错
-        if(event_num < 0)
+        if(event_num < -1)
         {
+            // 表示该错误一定不是因为无效的 epoll 导致的
+            assert(event_num != -2);
             // 如果只是中断,则直接重新循环
             if(errno == EINTR)
                 continue;

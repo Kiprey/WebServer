@@ -68,8 +68,9 @@ bool Epoll::del(int fd)
 int Epoll::wait(int timeout)
 {
     if(isEpollValid())
-        return (epoll_wait(epoll_fd_, events_, MAX_EVENTS, timeout) != -1);
-    return false;
+        return epoll_wait(epoll_fd_, events_, MAX_EVENTS, timeout);
+    // -2 表示非 epoll 错误
+    return -2;
 }
 
 void Epoll::destroy()
