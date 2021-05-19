@@ -53,8 +53,9 @@ public:
         STATE_PARSE_BODY,         // 解析 HTTP body (只针对 POST 请求解析. 注: GET 请求不会解析多余的body)
         STATE_ANALYSI_REQUEST,    // 解析获取到的整体报文,处理并发送对应的响应报文
         STATE_FINISHED,           // 当前报文已经解析完毕
-        STATE_ERROR,              // 遇到了错误,丢弃当前进度,继续下一个读取处理循环
-        STATE_FATAL_ERROR        // 遇到了无法恢复的错误,即将断开连接并销毁当前实例
+        STATE_ERROR,              // 遇到了错误, 无需任何操作即可恢复,直接继续下一个读取处理循环
+        STATE_ERROR_DISCARD_REQ,  // 遇到了错误, 必须丢弃报文才能从错误中恢复, 并继续下一个循环
+        STATE_FATAL_ERROR         // 遇到了无法恢复的错误,即将断开连接并销毁当前实例
     };
     // 获取状态
     STATE_TYPE getState()   { return state_; }
@@ -132,8 +133,10 @@ private:
 
     /**
      * @brief 初始化,清空所有数据
+     * @param discardReq 重置状态时,是否保留剩余没有处理的 request,以供下次循环使用
+     *          true 表示丢弃剩余 request, false 表示保留剩余 request
      */
-    void reset();
+    void reset(bool discardReq = false);
 
     /**
      * @brief 从client_fd_中读取数据至 request_中

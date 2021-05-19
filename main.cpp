@@ -112,7 +112,7 @@ int main(int argc, char* argv[])
     // 忽略 SIGPIPE 信号
     handleSigpipe();
     // 创建线程池
-    ThreadPool thread_pool(4);
+    ThreadPool thread_pool(8);
 
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)

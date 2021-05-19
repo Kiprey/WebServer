@@ -32,19 +32,25 @@ HttpHandler::~HttpHandler()
 {
     // 从 epoll 中删除该套接字相关的事件
     /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
-    epoll_->del(client_fd_);
+    bool ret = epoll_->del(client_fd_);
+    assert(ret);
     // 关闭客户套接字
-    LOG(INFO) << "------------------ Connection Closed ------------------" << endl;
+    LOG(INFO) << "------------ Connection Closed (socket: " << client_fd_ << ")------------" << endl;
     close(client_fd_);
 }
 
-void HttpHandler::reset()
+void HttpHandler::reset(bool discardReq)
 {
     // 清除已经处理过的数据
     assert(request_.length() >= curr_parse_pos_);
 
-    // TODO 这里可能会越界
-    request_ = request_.substr(curr_parse_pos_);
+    if(discardReq)
+        request_.clear();
+    else
+        // 为什么reset时要获取剩余字符串而不是全部清空
+        // 因为有可能一次性收到了两个连续的 http request 
+        // 处理完第一个后,要接着处理第二个
+        request_ = request_.substr(curr_parse_pos_);
     curr_parse_pos_ = 0;
     // 重设状态
     state_ = STATE_PARSE_URI;
@@ -65,12 +71,7 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
     // 非阻塞,使用 recv 读取
     ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
     if(len < 0)
-    {
-        // 读取时没有出错
-        if(errno == EAGAIN)
-            return ERR_SUCCESS;
         return ERR_READ_REQUEST_FAIL;
-    }
     /** 
      * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
      * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
@@ -81,7 +82,12 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
      */
     else if(len == 0)
     {
-        // 如果此时没读取到数据,则表示远程连接已经被关闭
+        // 读取时没有出错
+        if(errno == EAGAIN)
+            return ERR_SUCCESS;
+        // 否则,如果此时没读取到数据,则表示远程连接已经被关闭
+        // 此时的 errno 应该为 SUCCESS, 因为没有触发错误,而是正常断开连接
+        assert(errno == 0); 
         return ERR_CONNECTION_CLOSED;
     }
     // LOG(INFO) << "Read data: " << buffer << endl;
@@ -309,7 +315,7 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
         break;
     case ERR_AGAIN:
         ++againTimes_;
-        LOG(INFO) << "HTTP need read once again ! " << endl;
+        LOG(INFO) << "HTTP waiting for more messages... " << endl;
         /* 注意这里没有设置 STATE , 与 ERR_SUCESS一样 */
         if(againTimes_ > maxAgainTimes)
         {
@@ -328,7 +334,7 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
     case ERR_BAD_REQUEST:
         LOG(ERROR) << "HTTP Bad Request." << endl;
         sendErrorResponse("400", "Bad Request");
-        state_ = STATE_ERROR;
+        state_ = STATE_ERROR_DISCARD_REQ;
         break;
     case ERR_NOT_FOUND:
         LOG(ERROR) << "HTTP Not Found." << endl;
@@ -338,21 +344,21 @@ bool HttpHandler::handlerErrorType(HttpHandler::ERROR_TYPE err)
     case ERR_LENGTH_REQUIRED:
         LOG(ERROR) << "HTTP Length Required." << endl;
         sendErrorResponse("411", "Length Required");
-        state_ = STATE_ERROR;
+        state_ = STATE_ERROR_DISCARD_REQ;
         break;
     case ERR_NOT_IMPLEMENTED:
         LOG(ERROR) << "HTTP Request method is not implemented." << endl;
         sendErrorResponse("501", "Not Implemented");
-        state_ = STATE_ERROR;
+        state_ = STATE_ERROR_DISCARD_REQ;
         break;
     case ERR_INTERNAL_SERVER_ERR:
         sendErrorResponse("500", "Internal Server Error");
-        state_ = STATE_ERROR;
+        state_ = STATE_ERROR_DISCARD_REQ;
         break;
     case ERR_HTTP_VERSION_NOT_SUPPORTED:
         LOG(ERROR) << "HTTP Request HTTP Version Not Supported." << endl;
         sendErrorResponse("505", "HTTP Version Not Supported");
-        state_ = STATE_ERROR;
+        state_ = STATE_ERROR_DISCARD_REQ;
         break;
     default:
         UNREACHABLE();
@@ -425,22 +431,34 @@ bool HttpHandler::RunEventLoop()
         if(state_ == STATE_ANALYSI_REQUEST && handlerErrorType(handleRequest()))
             state_ = STATE_FINISHED;
 
-        // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
-        if(state_ == STATE_ERROR || state_ == STATE_FINISHED)
+        // 开始处理当前状态
+        switch(state_)
         {
+        // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
+        case STATE_ERROR:
+        case STATE_ERROR_DISCARD_REQ:
+        case STATE_FINISHED:
             // 如果 keep Alive, 则重置状态
+            // 对于那些必须丢弃所有接收数据才可恢复的错误,执行丢弃操作
             if(isKeepAlive_)
-                reset();
-            // 否则关闭当前连接
-            else
-                return false;
-        }
+            {
+                reset(state_ == STATE_ERROR_DISCARD_REQ);
+                // 重新开始循环
+                break;
+            }
+            // 否则,既然已经发生了错误 / 完成了请求,则直接销毁当前实例
+            /* fall through */
+
         // 如果是致命错误,则直接返回 false
-        else if(state_ == STATE_FATAL_ERROR)
+        case STATE_FATAL_ERROR:
             return false;
+
         // 其他状态下则表示需要更多数据,因此重新放入 epoll 中
-        else
-            epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+        default:
+            bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            assert(ret);
+            return true;
+        }
     }
     UNREACHABLE();
     return true;
