@@ -85,7 +85,7 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
          * 否则,如果此时没读取到数据,则表示远程连接已经被关闭
          * 如果是正常断开连接,则此时的 errno 应该为 SUCCESS, 因为没有触发错误
          * 如果收到了远程的 RST,则 errno 为 ENOENT
-         * TODO: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
+         * NOTE: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
          *       即重复返回 EAGAIN,因此需要设置一个 againTime
          *       最好有个进一步的处理
          */

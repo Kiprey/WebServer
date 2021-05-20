@@ -39,7 +39,6 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
                 LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
                             << strerror(errno) << endl;
                 // 如果报错,注意关闭 client_fd
-                /// TODO: 关闭 client_fd 之前, 发送一个 500 错误?
                 close(client_fd);
                 continue;
             }
