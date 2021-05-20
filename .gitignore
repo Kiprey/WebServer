@@ -8,3 +8,4 @@ WebServer
 .gdb_history
 # 其他需要ignore的文件
 ignore_*
+.VSCodeCounter/
