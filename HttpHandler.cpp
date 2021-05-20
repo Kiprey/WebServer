@@ -209,7 +209,6 @@ HttpHandler::ERROR_TYPE HttpHandler::parseBody()
 
     int len = atoi(len_str.c_str());
 
-    // TODO 偏移量要算一下
     if(request_.length() < curr_parse_pos_ + len)
         return ERR_AGAIN;
     http_body_ = request_.substr(curr_parse_pos_, len);
@@ -318,13 +317,10 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         if(pid == 0)
         {
             // 首先重新设置标准输入输出流
-            if(dup2(cgi_input[0], 0) == -1
-                || dup2(cgi_output[1], 1) == -1
-                || dup2(2, 1) == -1)
+            if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
                 exit(EXIT_FAILURE);
             close(cgi_input[1]);
             close(cgi_output[0]);
-            close(2);
 
             // 执行
             const char* path = path_.c_str();
@@ -343,6 +339,10 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             string responseBody;
             char buf[MAXBUF];
             ssize_t len;
+            /**
+             * @todo: 有一定概率导致readn 陷入阻塞状态读取不到数据, 但子进程正常进入 zombie 状态
+             * @command: ab -c 1000 -n 10000 -s 300 -p ignored_post.txt 127.0.0.1:8020/html/CGI/base64script
+             */
             while((len = readn(cgi_output[0], buf, MAXBUF, true, true)) > 0)
             {
                 responseBody += string(buf, buf + len);
