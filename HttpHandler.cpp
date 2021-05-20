@@ -319,8 +319,10 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             // 首先重新设置标准输入输出流
             if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
                 exit(EXIT_FAILURE);
+            close(cgi_input[0]);
             close(cgi_input[1]);
             close(cgi_output[0]);
+            close(cgi_output[1]);
 
             // 执行
             const char* path = path_.c_str();

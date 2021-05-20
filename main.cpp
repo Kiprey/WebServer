@@ -1,7 +1,8 @@
 #include <iostream>
 #include <netinet/in.h>
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/timerfd.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "Epoll.h"
@@ -58,7 +59,9 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
     }while(errno == EINTR || errno == ECONNABORTED);
     
     // accept 的错误处理
-    if(errno != EAGAIN)
+    // 正常情况下,如果处理了所有的 accept后, errno == EAGAIN
+    // 但是如果由于文件描述符不够用了,则会返回 EMFILE,此时只需等待下次连接时一并处理即可
+    if(errno != EAGAIN && errno != EMFILE)
         LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
 }
 
