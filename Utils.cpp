@@ -40,7 +40,7 @@ int socket_bind_and_listen(int port)
     // 开始创建 socket, 注意这是阻塞模式的socket
     // AF_INET      : IPv4 Internet protocols  
     // SOCK_STREAM  : TCP socket
-    if((listen_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    if((listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
         return -1;
 
     // 绑定端口
@@ -85,7 +85,7 @@ bool setSocketNoDelay(int fd)
     return true;
 }
 
-ssize_t readn(int fd, void*buf, size_t len, bool isBlock, bool isRead)
+ssize_t readn(int fd, void* buf, size_t len, bool isBlock, bool isRead)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;
@@ -118,7 +118,8 @@ ssize_t readn(int fd, void*buf, size_t len, bool isBlock, bool isRead)
         pos += tmpRead;
 
         // 如果是阻塞模式下,并且读取到的数据较小,则说明数据已经全部读取完成,直接返回
-        if(isBlock && static_cast<size_t>(tmpRead) < leftNum)
+        /// TODO: 如果发送的数据刚好为 leftNum, 则会产生阻塞情况, 这可能可以通过 MSG_PEEK 来解决
+        if(isBlock && (static_cast<size_t>(tmpRead) < leftNum))
             break;
 
         leftNum -= tmpRead;
@@ -126,7 +127,7 @@ ssize_t readn(int fd, void*buf, size_t len, bool isBlock, bool isRead)
     return readNum;
 }
 
-ssize_t writen(int fd, void*buf, size_t len, bool isWrite)
+ssize_t writen(int fd, const void* buf, size_t len, bool isWrite)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;

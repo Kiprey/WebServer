@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "HttpHandler.h"
@@ -63,6 +64,7 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
     char buffer[MAXBUF];
     
     // 非阻塞,使用 recv 读取
+    /// TODO: 如果读不全怎么办
     ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
     if(len < 0)
         return ERR_READ_REQUEST_FAIL;
@@ -79,9 +81,16 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
         // 读取时没有出错
         if(errno == EAGAIN)
             return ERR_SUCCESS;
-        // 否则,如果此时没读取到数据,则表示远程连接已经被关闭
-        // 此时的 errno 应该为 SUCCESS, 因为没有触发错误,而是正常断开连接
-        assert(errno == 0); 
+        /** 
+         * 否则,如果此时没读取到数据,则表示远程连接已经被关闭
+         * 如果是正常断开连接,则此时的 errno 应该为 SUCCESS, 因为没有触发错误
+         * 如果收到了远程的 RST,则 errno 为 ENOENT
+         * TODO: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
+         *       即重复返回 EAGAIN,因此需要设置一个 againTime
+         *       最好有个进一步的处理
+         */
+        assert(errno == 0 || errno == ENOENT); 
+        // 不管怎样,直接关闭连接
         return ERR_CONNECTION_CLOSED;
     }
     // LOG(INFO) << "Read data: " << buffer << endl;
@@ -126,15 +135,6 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
     // 获取path时,注意加上 www path
     path_ = www_path + first_line.substr(pos1, pos2 - pos1);
     
-    // 判断目标路径是否是文件夹
-    struct stat st;
-    if(stat(path_.c_str(), &st) == 0)
-    {
-        // 如果试图打开一个文件夹,则添加 index.html
-        if (S_ISDIR(st.st_mode))
-            path_ += "/index.html";
-    }
-
     LOG(INFO) << "Path: " << path_ << endl;
 
     // c. 查看HTTP版本
@@ -236,6 +236,25 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             isKeepAlive_ = true;
     }
 
+    // 获取目标文件的信息
+    struct stat st;
+    if(stat(path_.c_str(), &st) == -1)
+    {
+        if(errno == ENOENT)
+        {
+            LOG(ERROR) << "file [" << path_ << "] not found." << endl;
+            return ERR_NOT_FOUND;
+        }
+        else
+        {
+            LOG(ERROR) << "Can not get file [" << path_ << "] state ! " 
+                << strerror(errno) << endl;
+            return ERR_INTERNAL_SERVER_ERR;
+        }
+    }
+
+    // 开始处理请求
+    // 对于普通的 GET / HEAD 请求,读取文件并发送
     if(method_ == METHOD_GET || method_ == METHOD_HEAD)
     {
         // 试图打开一个文件
@@ -246,50 +265,109 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             LOG(ERROR) << "File [" << path_ << "] open failed ! " << strerror(errno) << endl;
             return ERR_NOT_FOUND;
         }  
-        else
+        // 读取文件, 使用 mmap 来高速读取文件
+        void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
+        // 记得关闭文件描述符
+        close(file_fd); 
+        // 异常处理
+        if(addr == MAP_FAILED)
         {
-            // 获取目标文件的大小
-            struct stat st;
-            if(stat(path_.c_str(), &st) == -1)
-            {
-                LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << endl;
-                return ERR_INTERNAL_SERVER_ERR;
-            }
-            // 读取文件, 使用 mmap 来高速读取文件
-            void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
-            // 记得关闭文件描述符
-            close(file_fd); 
-            // 异常处理
-            if(addr == MAP_FAILED)
-            {
-                LOG(ERROR) << "Can not map file [" << path_ << "] -> mem ! " << endl;
-                return ERR_INTERNAL_SERVER_ERR;
-            }
-            // 将数据从内存页存入至 responseBody
-            char* file_data_ptr = static_cast<char*>(addr);
-            string responseBody(file_data_ptr, file_data_ptr + st.st_size);
-            // 记得删除内存
-            int res = munmap(addr, st.st_size);
-            if(res == -1)
-                LOG(ERROR) << "Can not unmap file [" << path_ << "] <-> mem ! " << endl;
-            // 获取 Content-type
-            string suffix = path_;
-            // 通过循环找到最后一个 dot
-            size_t dot_pos;
-            while((dot_pos = suffix.find('.')) != string::npos)
-                suffix = suffix.substr(dot_pos + 1);
-
-            // 发送数据, 在该函数内部, METHOD_HEAD 不发送 http body
-            return sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
+            LOG(ERROR) << "Can not map file [" << path_ << "] -> mem ! " << endl;
+            return ERR_INTERNAL_SERVER_ERR;
         }
+        // 将数据从内存页存入至 responseBody
+        char* file_data_ptr = static_cast<char*>(addr);
+        string responseBody(file_data_ptr, file_data_ptr + st.st_size);
+        // 记得删除内存
+        int res = munmap(addr, st.st_size);
+        if(res == -1)
+            LOG(ERROR) << "Can not unmap file [" << path_ << "] <-> mem ! " << endl;
+        // 获取 Content-type
+        string suffix = path_;
+        // 通过循环找到最后一个 dot
+        size_t dot_pos;
+        while((dot_pos = suffix.find('.')) != string::npos)
+            suffix = suffix.substr(dot_pos + 1);
+
+        // 发送数据, 在该函数内部, METHOD_HEAD 不发送 http body
+        return sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
+    // 而对于POST来说,将 http body 传入目标可执行文件并将结果返回给客户端
+    /// TODO: 子程序的超时处理
     else if(method_ == METHOD_POST)
     {
+        // 创建两个管道
+        int cgi_output[2];
+        int cgi_input[2];
+        if (pipe(cgi_output) == -1) {
+            LOG(ERROR) << "cgi_output create error. " << strerror(errno) << endl;
+            return ERR_INTERNAL_SERVER_ERR;
+        }
+        if (pipe(cgi_input) == -1) {
+            LOG(ERROR) << "cgi_output create error. " << strerror(errno) << endl;
+            return ERR_INTERNAL_SERVER_ERR;
+        }
+        // 尝试执行该CGI程序
+        pid_t pid;
+        if((pid = fork()) < 0)
+        {
+            LOG(ERROR) << "Fork error. " << strerror(errno) << endl;
+            return ERR_INTERNAL_SERVER_ERR;
+        }
+        // 对于子进程来说
+        if(pid == 0)
+        {
+            // 首先重新设置标准输入输出流
+            if(dup2(cgi_input[0], 0) == -1
+                || dup2(cgi_output[1], 1) == -1
+                || dup2(2, 1) == -1)
+                exit(EXIT_FAILURE);
+            close(cgi_input[1]);
+            close(cgi_output[0]);
+            close(2);
 
+            // 执行
+            const char* path = path_.c_str();
+            execl(path, path, nullptr);
+            exit(EXIT_FAILURE);
+        }
+        // 对于父进程WebServer来说
+        else
+        {
+            close(cgi_input[0]);
+            close(cgi_output[1]);
+
+            writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
+            close(cgi_input[1]);
+
+            string responseBody;
+            char buf[MAXBUF];
+            ssize_t len;
+            while((len = readn(cgi_output[0], buf, MAXBUF, true, true)) > 0)
+            {
+                responseBody += string(buf, buf + len);
+                // 只有在 len 读满了才会重置
+                /// TODO: 若发送的数据刚好为 MAXBUF,则可能阻塞卡死
+                if(static_cast<size_t>(len) < MAXBUF)
+                    break;
+            }
+            close(cgi_output[0]);
+
+            int wstats;
+            if(waitpid(pid, &wstats, WUNTRACED) < -1)
+                LOG(ERROR) << "waitpid error. " << strerror(errno) << endl;
+            // 如果是因为信号而中断的,则直接kill
+            if(!WIFEXITED(wstats))
+                kill(pid, SIGKILL);
+            if(responseBody.empty())
+                return ERR_INTERNAL_SERVER_ERR;
+            // 发送数据
+            return sendResponse("200", "OK", MimeType::getMineType("txt"), responseBody);
+        }
     }
     else
         return ERR_INTERNAL_SERVER_ERR;
-    
+    UNREACHABLE();
     return ERR_SUCCESS;
 }
 
@@ -375,6 +453,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
         sstream << responseBody;
 
     string&& response = sstream.str();
+    /// TODO: 尽管writen是阻塞写入,但需要注意的是,阻塞写入可能会极大影响Server性能,因此最好使用 epoll 来写入
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
 
     // 输出返回的数据
@@ -439,7 +518,7 @@ bool HttpHandler::RunEventLoop()
         return false;
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
-    bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
     assert(ret);
     return true;
 }

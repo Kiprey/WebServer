@@ -31,7 +31,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
      *  则重新循环. 其中第三点, 若发生了 aborted 错误,则继续循环接受下一个socket 的请求
      */
     do{
-        while((client_fd = accept(listen_fd, (sockaddr*)&client_addr, &client_addr_len)) != -1)
+        while((client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, SOCK_CLOEXEC)) != -1)
         {
             // 设置 client_fd 非阻塞
             if(!setSocketNoBlock(client_fd))
@@ -51,7 +51,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
              *        可以看出,现在指针已经满天飞了 2333
              */
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
-            bool ret = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            bool ret = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
             assert(ret);
             // 输出相关信息
             printConnectionStatus(client_fd, "New Connection");
@@ -74,7 +74,7 @@ void handleOldConnection(ThreadPool* thread_pool, epoll_event* event)
     // 处理一些错误事件
     int events_ = event->events;
     // 如果存在错误,或者不是因为 read 事件而被唤醒
-    if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || !(events_ & EPOLLIN))
+    if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || (events_ & EPOLLRDHUP) || !(events_ & EPOLLIN))
     {
         LOG(ERROR) << "Error events(" << events_ << ")" << endl;
         // 当某个 handler 无法使用时,一定要销毁内存
@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
     }
     
     // 声明一个 epoll 实例,该实例将在整个main函数结束时被释放
-    Epoll epoll;
+    Epoll epoll(EPOLL_CLOEXEC);
     assert(epoll.isEpollValid());
     /**
      * 将 listen_fd 添加进 epoll 实例
@@ -150,7 +150,7 @@ int main(int argc, char* argv[])
         // 阻塞等待新的事件
         int event_num = epoll.wait(-1);
         // 如果报错
-        if(event_num < -1)
+        if(event_num < 0)
         {
             // 表示该错误一定不是因为无效的 epoll 导致的
             assert(event_num != -2);

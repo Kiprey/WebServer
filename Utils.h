@@ -66,7 +66,7 @@ bool setSocketNoDelay(int fd);
  * @note    默认情况下, 启用阻塞模式的recv函数(注意启用前必须已经设置 socket 为阻塞模式)
  * @note    recv函数与read函数的不同之处在于,recv专为socket而生,支持更多的错误处理
  */
-ssize_t readn(int fd, void*buf, size_t len, 
+ssize_t readn(int fd, void* buf, size_t len, 
                 bool isBlock = true, bool isRead = false);
 
 /**
@@ -79,7 +79,7 @@ ssize_t readn(int fd, void*buf, size_t len,
  * @note    内部函数在错误时会生成 errno
  * @note    该函数将 **阻塞** 写入数据, 除非有其他错误发生
  */
-ssize_t writen(int fd, void*buf, size_t len, bool isWrite = false);
+ssize_t writen(int fd, const void* buf, size_t len, bool isWrite = false);
 
 /**
  * @brief 忽略 SIGPIPE信号
