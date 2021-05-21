@@ -65,7 +65,7 @@ int socket_bind_and_listen(int port)
     return listen_fd;
 }
 
-bool setSocketNoBlock(int fd)
+bool setFdNoBlock(int fd)
 {
     // 获取fd对应的flag
     int flag = fcntl(fd, F_GETFD);
@@ -85,7 +85,7 @@ bool setSocketNoDelay(int fd)
     return true;
 }
 
-ssize_t readn(int fd, void* buf, size_t len, bool isBlock, bool isRead)
+ssize_t readn(int fd, void* buf, size_t len, bool isRead)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;
@@ -99,7 +99,7 @@ ssize_t readn(int fd, void* buf, size_t len, bool isBlock, bool isRead)
         if(isRead)
             tmpRead = read(fd, pos, leftNum);
         else
-            tmpRead = recv(fd, pos, leftNum, (isBlock ? 0 : MSG_DONTWAIT));
+            tmpRead = recv(fd, pos, leftNum, MSG_DONTWAIT);
         
         if(tmpRead < 0)
         {
@@ -116,11 +116,6 @@ ssize_t readn(int fd, void* buf, size_t len, bool isBlock, bool isRead)
             break;
         readNum += tmpRead;
         pos += tmpRead;
-
-        // 如果是阻塞模式下,并且读取到的数据较小,则说明数据已经全部读取完成,直接返回
-        /// TODO: 如果发送的数据刚好为 leftNum, 则会产生阻塞情况, 这可能可以通过 MSG_PEEK 来解决
-        if(isBlock && (static_cast<size_t>(tmpRead) < leftNum))
-            break;
 
         leftNum -= tmpRead;
     }

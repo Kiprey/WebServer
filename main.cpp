@@ -35,7 +35,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
         while((client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, SOCK_CLOEXEC)) != -1)
         {
             // 设置 client_fd 非阻塞
-            if(!setSocketNoBlock(client_fd))
+            if(!setFdNoBlock(client_fd))
             {
                 LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
                             << strerror(errno) << endl;
@@ -78,7 +78,7 @@ void handleOldConnection(ThreadPool* thread_pool, epoll_event* event)
     // 如果存在错误,或者不是因为 read 事件而被唤醒
     if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || (events_ & EPOLLRDHUP) || !(events_ & EPOLLIN))
     {
-        LOG(ERROR) << "Socket(" << handler->getClientFd() << ") was closed by peer / error." << endl;
+        LOG(INFO) << "Socket(" << handler->getClientFd() << ") was closed by peer / error." << endl;
         // 当某个 handler 无法使用时,一定要销毁内存
         delete handler;
         // 之后重新开始遍历新的事件.
@@ -126,7 +126,7 @@ int main(int argc, char* argv[])
     }
 
     // 设置 listen_fd 非阻塞
-    if(!setSocketNoBlock(listen_fd))
+    if(!setFdNoBlock(listen_fd))
     {
         LOG(ERROR) << "Can not set socket " << listen_fd << " No Block ! " 
                     << strerror(errno) << endl;

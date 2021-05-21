@@ -37,12 +37,12 @@ std::ostream& logmsg(int flag);
 int socket_bind_and_listen(int port);
 
 /**
- * @brief 设置传入的socket为非阻塞模式
+ * @brief 设置传入的文件描述符为非阻塞模式
  * @param fd 传入的目标套接字
  * @return true表示设置成功, false表示设置失败
  * @note   fcntl函数在错误时会生成 errno
  */
-bool setSocketNoBlock(int fd);
+bool setFdNoBlock(int fd);
 
 /**
  * @brief 设置socket禁用 nagle算法
@@ -53,21 +53,18 @@ bool setSocketNoBlock(int fd);
 bool setSocketNoDelay(int fd);
 
 /**
- * @brief   read/recv的wrapper
+ * @brief   非阻塞模式 read/recv的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
- * @param   isBlock true 则以阻塞模式读取,否则以 非阻塞模式读取
  * @param   isRead  启用 read 函数
  * @return  成功读取的长度
  * @note    内部函数在错误时会生成 errno
- * @note    阻塞模式下,如果读取到任何数据则函数马上返回,如果没有读取到数据则阻塞
- *          非阻塞模式下,无论有没有读取到数据,都会马上返回
- * @note    默认情况下, 启用阻塞模式的recv函数(注意启用前必须已经设置 socket 为阻塞模式)
+ * @note    非阻塞模式下,无论有没有读取到数据,都会马上返回
+ * @note    默认情况下, 启用非阻塞模式的recv函数(注意启用前必须已经设置 socket 为阻塞模式)
  * @note    recv函数与read函数的不同之处在于,recv专为socket而生,支持更多的错误处理
  */
-ssize_t readn(int fd, void* buf, size_t len, 
-                bool isBlock = true, bool isRead = false);
+ssize_t readn(int fd, void* buf, size_t len, bool isRead = false);
 
 /**
  * @brief   write/send的wrapper

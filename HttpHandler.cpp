@@ -63,44 +63,45 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 
     char buffer[MAXBUF];
     
-    // 非阻塞,使用 recv 读取
-    /// TODO: 如果读不全怎么办
-    ssize_t len = readn(client_fd_, buffer, MAXBUF, false, false);
-    if(len < 0)
-        return ERR_READ_REQUEST_FAIL;
-    /** 
-     * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
-     * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
-     * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
-     * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
-     * 
-     * 如果读取到的字节数为0,则说明远程连接已经被关闭.
-     */
-    else if(len == 0)
+    while(true)
     {
-        // 读取时没有出错
-        if(errno == EAGAIN)
-            return ERR_SUCCESS;
+        // 非阻塞,使用 recv 读取
+        ssize_t len = readn(client_fd_, buffer, MAXBUF, false);
+        if(len < 0)
+            return ERR_READ_REQUEST_FAIL;
         /** 
-         * 否则,如果此时没读取到数据,则表示远程连接已经被关闭
-         * 如果是正常断开连接,则此时的 errno 应该为 SUCCESS, 因为没有触发错误
-         * 如果收到了远程的 RST,则 errno 为 ENOENT
-         * NOTE: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
-         *       即重复返回 EAGAIN,因此需要设置一个 againTime
-         *       最好有个进一步的处理
+         * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
+         * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
+         * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
+         * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
+         * 
+         * 如果读取到的字节数为0,则说明远程连接已经被关闭.
          */
-        assert(errno == 0 || errno == ENOENT); 
-        // 不管怎样,直接关闭连接
-        return ERR_CONNECTION_CLOSED;
+        else if(len == 0)
+        {
+            // 读取时没有出错
+            if(errno == EAGAIN)
+                return ERR_SUCCESS;
+            /** 
+             * 否则,如果此时没读取到数据,则表示远程连接已经被关闭
+             * 如果是正常断开连接,则此时的 errno 应该为 SUCCESS, 因为没有触发错误
+             * 如果收到了远程的 RST,则 errno 为 ENOENT
+             * NOTE: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
+             *       即重复返回 EAGAIN,因此需要设置一个 againTime
+             *       最好有个进一步的处理
+             */
+            assert(errno == 0 || errno == ENOENT); 
+            // 不管怎样,直接关闭连接
+            return ERR_CONNECTION_CLOSED;
+        }
+        // LOG(INFO) << "Read data: " << buffer << endl;
+
+        // 将读取到的数据组装起来
+        string request(buffer, buffer + len);
+        LOG(INFO) << "{" << escapeStr(request, MAXBUF) << "}" << endl;
+
+        request_ += request;
     }
-    // LOG(INFO) << "Read data: " << buffer << endl;
-
-    // 将读取到的数据组装起来
-    string request(buffer, buffer + len);
-    LOG(INFO) << "{" << escapeStr(request, MAXBUF) << "}" << endl;
-
-    request_ += request;
-
     return ERR_SUCCESS;
 }
 
@@ -292,7 +293,6 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         return sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
     // 而对于POST来说,将 http body 传入目标可执行文件并将结果返回给客户端
-    /// TODO: 子程序的超时处理
     else if(method_ == METHOD_POST)
     {
         // 创建两个管道
@@ -330,37 +330,50 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             exit(EXIT_FAILURE);
         }
         // 对于父进程WebServer来说
+        /// TODO: 可能造成 broken pipe 以及大量无法关闭的 fd
         else
         {
             close(cgi_input[0]);
             close(cgi_output[1]);
 
-            writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
+            /// TODO: 确保数据成功写入
+            ssize_t len = writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
+            // 这里确保写入正确
+            assert(len >= 0 && static_cast<size_t>(len) == http_body_.length());
+
             close(cgi_input[1]);
+
+            int wstats;
+            // 设置超时时间 maxCGIRuntime(ms)
+            int timeouts = maxCGIRuntime;
+            bool isExit = false;
+            while(timeouts > 0 && !isExit)
+            {
+                // 单次休息 cgiStepTime(ms)
+                if(!usleep(cgiStepTime * 1000))
+                    timeouts -= cgiStepTime;
+                if(waitpid(pid, &wstats, WNOHANG) < -1)
+                    LOG(ERROR) << "waitpid error. " << strerror(errno) << endl;
+                // 将执行结果放入该 bool 值中
+                isExit = WIFEXITED(wstats);
+            }
+            // 如果超时了但仍然没有执行完,则直接kill
+            if(!isExit)
+                kill(pid, SIGKILL);
 
             string responseBody;
             char buf[MAXBUF];
-            ssize_t len;
-            /**
-             * @todo: 有一定概率导致readn 陷入阻塞状态读取不到数据, 但子进程正常进入 zombie 状态
-             * @command: ab -c 1000 -n 10000 -s 300 -p ignored_post.txt 127.0.0.1:8020/html/CGI/base64script
-             */
-            while((len = readn(cgi_output[0], buf, MAXBUF, true, true)) > 0)
+            // 非阻塞读取
+            if(!setFdNoBlock(cgi_output[0]))
             {
-                responseBody += string(buf, buf + len);
-                // 只有在 len 读满了才会重置
-                /// TODO: 若发送的数据刚好为 MAXBUF,则可能阻塞卡死
-                if(static_cast<size_t>(len) < MAXBUF)
-                    break;
+                LOG(ERROR) << "set fd(" << cgi_output[0] << ") no block fail! " << strerror(errno) << endl;
+                close(cgi_output[0]);
+                return ERR_INTERNAL_SERVER_ERR;
             }
+            while((len = readn(cgi_output[0], buf, MAXBUF, true)) > 0)
+                responseBody += string(buf, buf + len);
             close(cgi_output[0]);
 
-            int wstats;
-            if(waitpid(pid, &wstats, WUNTRACED) < -1)
-                LOG(ERROR) << "waitpid error. " << strerror(errno) << endl;
-            // 如果是因为信号而中断的,则直接kill
-            if(!WIFEXITED(wstats))
-                kill(pid, SIGKILL);
             if(responseBody.empty())
                 return ERR_INTERNAL_SERVER_ERR;
             // 发送数据
@@ -446,7 +459,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
     stringstream sstream;
     sstream << "HTTP/1.1" << " " << responseCode << " " << responseMsg << "\r\n";
     sstream << "Connection: " << (isKeepAlive_ ? "Keep-Alive" : "Close") << "\r\n";
-    sstream << "Server: WebServer/1.0" << "\r\n";
+    sstream << "Server: WebServer/1.1" << "\r\n";
     sstream << "Content-length: " << responseBody.size() << "\r\n";
     sstream << "Content-type: " << responseBodyType << "\r\n";
     sstream << "\r\n";

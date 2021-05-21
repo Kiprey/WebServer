@@ -98,6 +98,8 @@ private:
     static string www_path;
     const size_t MAXBUF = 1024;     // 缓冲区大小
     const int maxAgainTimes = 10;   // 最多重试次数
+    const int maxCGIRuntime = 1000; // CGI程序最长等待时间(ms)
+    const int cgiStepTime = 1;      // 单次轮询CGI程序是否退出的等待时间(ms, <= 1000)
 
     // 相关描述符
     int client_fd_;
