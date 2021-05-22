@@ -19,8 +19,8 @@
  // 如果先前没有设置 www 路径,则设置路径为当前的工作路径
 string HttpHandler::www_path = ".";
 
-HttpHandler::HttpHandler(Epoll* epoll, int fd) 
-    : client_fd_(fd), epoll_(epoll), curr_parse_pos_(0)
+HttpHandler::HttpHandler(Epoll* epoll, int client_fd, Timer* timer) 
+    : client_fd_(client_fd), timer_(timer), epoll_(epoll)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
@@ -33,11 +33,14 @@ HttpHandler::~HttpHandler()
 {
     // 从 epoll 中删除该套接字相关的事件
     /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
-    bool ret = epoll_->del(client_fd_);
-    assert(ret);
+    bool ret1 = epoll_->del(client_fd_);
+    bool ret2 = epoll_->del(timer_->getFd());
+    assert(ret1 && ret2);
     // 关闭客户套接字
     LOG(INFO) << "------------ Connection Closed (socket: " << client_fd_ << ")------------" << endl;
     close(client_fd_);
+    // 删除定时器
+    delete timer_;
 }
 
 void HttpHandler::reset()
@@ -55,6 +58,8 @@ void HttpHandler::reset()
     headers_.clear();
     // 重置 body
     http_body_.clear();
+    // 重置超时时间
+    timer_->setTime(timeoutPerRequest, 0);
 }
 
 HttpHandler::ERROR_TYPE HttpHandler::readRequest()
@@ -524,6 +529,9 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
     stringstream sstream;
     sstream << "HTTP/1.1" << " " << responseCode << " " << responseMsg << "\r\n";
     sstream << "Connection: " << (isKeepAlive_ ? "Keep-Alive" : "Close") << "\r\n";
+    if(isKeepAlive_)
+        // Keep-Alive 头中, timeout 表示超时时间(单位s), max表示最多接收请求次数,超过则断开.
+        sstream << "Keep-Alive: timeout=" << timeoutPerRequest << ", max=" << againTimes_ << "\r\n";
     sstream << "Server: WebServer/1.1" << "\r\n";
     sstream << "Content-length: " << responseBody.size() << "\r\n";
     sstream << "Content-type: " << responseBodyType << "\r\n";
@@ -598,7 +606,9 @@ bool HttpHandler::RunEventLoop()
         return false;
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
-    bool ret = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
-    assert(ret);
+    bool ret1 = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
+    bool ret2 = epoll_->modify(timer_->getFd(), this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    assert(ret1 && ret2);
+
     return true;
 }

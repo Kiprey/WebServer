@@ -1,7 +1,6 @@
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/timerfd.h>    // TODO 启用超时处理程序
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -32,32 +31,34 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
      *  则重新循环. 其中第三点, 若发生了 aborted 错误,则继续循环接受下一个socket 的请求
      */
     do{
-        while((client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, SOCK_CLOEXEC)) != -1)
+        while((client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, 
+                SOCK_NONBLOCK | SOCK_CLOEXEC)) != -1)
         {
-            // 设置 client_fd 非阻塞
-            if(!setFdNoBlock(client_fd))
-            {
-                LOG(ERROR) << "Can not set socket " << client_fd << " No Block ! " 
-                            << strerror(errno) << endl;
-                // 如果报错,注意关闭 client_fd
-                close(client_fd);
-                continue;
-            }
             /** 构建一个新的 HttpHandler,并放入 epoll 实例中
              *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
              *  且每个套接字只会被一个线程处理
              *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
              *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
+             *        每个 Timer 在此处创建, 在 HttpHandler 中被释放
              *        可以看出,现在指针已经满天飞了 2333
              */
-            HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
+            Timer* timer = new Timer(TFD_NONBLOCK | TFD_CLOEXEC);
+            // 如果timer创建失败,则直接break; 注意timer创建失败后会自动设置 errno
+            if(!timer->isValid())
+            {
+                delete timer;
+                break;
+            }
+            HttpHandler* client_handler = new HttpHandler(epoll, client_fd, timer);
             /**
              * @brief EPOLLRDHUP EPOLLHUP 不同点,前者是半关闭连接时出发,后者是完全关闭后触发
              * @ref tcp 源码 https://elixir.bootlin.com/linux/v4.19/source/net/ipv4/tcp.c#L524
              * @ref TCP: When is EPOLLHUP generated? https://stackoverflow.com/questions/52976152/tcp-when-is-epollhup-generated
              */ 
-            bool ret = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
-            assert(ret);
+            bool ret1 = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
+            // 设置定时器以边缘-单次触发方式
+            bool ret2 = epoll->add(timer->getFd(), client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            assert(ret1 && ret2);
             // 输出相关信息
             printConnectionStatus(client_fd, "New Connection");
         }
@@ -66,16 +67,20 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
     // accept 的错误处理
     // 正常情况下,如果处理了所有的 accept后, errno == EAGAIN
     // 但是如果由于文件描述符不够用了,则会返回 EMFILE,此时只需等待下次连接时一并处理即可
-    if(errno != EAGAIN && errno != EMFILE)
+    if(errno == EMFILE)
+        LOG(ERROR) << "No reliable pipes ! " << endl;
+    else if(errno != EAGAIN)
         LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
 }
 
 /**
  * @brief 处理旧的连接
+ * @param epoll         被唤醒的 epoll
+ * @param fd            被唤醒的文件描述符
  * @param thread_pool   目标线程池
  * @param event         待处理的事件
  */
-void handleOldConnection(ThreadPool* thread_pool, epoll_event* event)
+void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_event* event)
 {
     HttpHandler* handler = static_cast<HttpHandler*>(event->data.ptr);
     // 处理一些错误事件
@@ -89,20 +94,36 @@ void handleOldConnection(ThreadPool* thread_pool, epoll_event* event)
         // 之后重新开始遍历新的事件.
         return;
     }
-    // 如果没有错误发生,则将其放入线程池中并行执行
-    auto handlerConnect = [](void* arg)
+    // 如果没有错误发生
+    // 1. 如果是因为超时
+    if(fd == handler->getTimer()->getFd())
     {
-        HttpHandler* handler = static_cast<HttpHandler*>(arg);
+        /* 这里不像下面需要从epoll中关闭 timer fd
+           因为 timer将会在HttpHandler的析构函数中从epoll内部删除 */
+        // 删除 handler 实例
+        delete handler;
+    }
+    // 2. 如果不是因为超时
+    else 
+    {
+        // 则从epoll中关闭 timer, 防止条件竞争
+        epoll->modify(handler->getTimer()->getFd(), nullptr, 0);
+        // 并将其放入线程池中并行执行
+        thread_pool->appendTask(
+            // lambda 函数
+            [](void* arg)
+            {
+                HttpHandler* handler = static_cast<HttpHandler*>(arg);
 
-        int client_fd = handler->getClientFd();
-        printConnectionStatus(client_fd, "New Message");
+                int client_fd = handler->getClientFd();
+                printConnectionStatus(client_fd, "New Message");
 
-        // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
-        if(!(handler->RunEventLoop()))
-            delete handler;
-    };
-    
-    thread_pool->appendTask(handlerConnect, handler);
+                // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
+                if(!(handler->RunEventLoop()))
+                    delete handler;
+            }, 
+            handler);
+    }
 }
 
 int main(int argc, char* argv[])
@@ -130,14 +151,6 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    // 设置 listen_fd 非阻塞
-    if(!setFdNoBlock(listen_fd))
-    {
-        LOG(ERROR) << "Can not set socket " << listen_fd << " No Block ! " 
-                    << strerror(errno) << endl;
-        exit(EXIT_FAILURE);
-    }
-    
     // 声明一个 epoll 实例,该实例将在整个main函数结束时被释放
     Epoll epoll(EPOLL_CLOEXEC);
     assert(epoll.isEpollValid());
@@ -147,8 +160,9 @@ int main(int argc, char* argv[])
      * NOTE: 监听套接字实际上并没有处理 Http 报文
      *       该HttpHandler的作用 **只是存放 listen_fd** .
      *       listen_handler 将会在main函数结束前被释放(尽管main函数永不结束)
+     *       * . listen_fd 的Timer为nullptr
      */
-    HttpHandler* listen_handler = new HttpHandler(&epoll, listen_fd);
+    HttpHandler* listen_handler = new HttpHandler(&epoll, listen_fd, nullptr);
     epoll.add(listen_fd, listen_handler, EPOLLET | EPOLLIN);
 
     // 开始事件循环
@@ -188,7 +202,7 @@ int main(int argc, char* argv[])
             if(fd == listen_fd)
                 handleNewConnections(&epoll, listen_fd);
             else
-                handleOldConnection(&thread_pool, &event);
+                handleOldConnection(&epoll, fd, &thread_pool, &event);
         }
     }
     delete listen_handler;

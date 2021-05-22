@@ -40,7 +40,7 @@ int socket_bind_and_listen(int port)
     // 开始创建 socket, 注意这是阻塞模式的socket
     // AF_INET      : IPv4 Internet protocols  
     // SOCK_STREAM  : TCP socket
-    if((listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
+    if((listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0)) == -1)
         return -1;
 
     // 绑定端口

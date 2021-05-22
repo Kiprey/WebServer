@@ -5,6 +5,7 @@
 #include <map>
 
 #include "Epoll.h"
+#include "Timer.h"
 
 using namespace std;
 
@@ -20,9 +21,10 @@ public:
     /**
      * @brief   显式指定 client fd
      * @param   epoll_fd    epoll 实例相关的描述符
-     * @param   fd          连接的 fd, 初始值为 -1
+     * @param   client_fd   连接的 client_fd
+     * @param   timer       给当前连接限制时间的timer
      */
-    explicit HttpHandler(Epoll* epoll, int fd);
+    explicit HttpHandler(Epoll* epoll, int client_fd, Timer* timer);
 
     /**
      * @brief   释放所有 HttpHandler 所使用的资源
@@ -41,6 +43,8 @@ public:
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
     Epoll* getEpoll()           { return epoll_; }
+    Timer* getTimer()           { return timer_; }
+    
 
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
@@ -96,13 +100,17 @@ private:
 
     // 当前 HTTP handler 的 www 工作目录, 默认情况下为当前工作目录
     static string www_path;
-    const size_t MAXBUF = 1024;     // 缓冲区大小
-    const int maxAgainTimes = 10;   // 最多重试次数
-    const int maxCGIRuntime = 1000; // CGI程序最长等待时间(ms)
-    const int cgiStepTime = 1;      // 单次轮询CGI程序是否退出的等待时间(ms, <= 1000)
+
+    // 一些常量
+    const size_t MAXBUF = 1024;         // 缓冲区大小
+    const int maxAgainTimes = 10;       // 最多重试次数
+    const int maxCGIRuntime = 1000;     // CGI程序最长等待时间(ms)
+    const int cgiStepTime = 1;          // 单次轮询CGI程序是否退出的等待时间(ms, <= 1000)
+    const int timeoutPerRequest = 20;   // 单个请求的超时时间(s)
 
     // 相关描述符
     int client_fd_;
+    Timer* timer_;
     Epoll* epoll_;
     // http 请求包的所有数据
     string request_;
