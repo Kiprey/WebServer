@@ -20,13 +20,19 @@
 string HttpHandler::www_path = ".";
 
 HttpHandler::HttpHandler(Epoll* epoll, int client_fd, Timer* timer) 
-    : client_fd_(client_fd), timer_(timer), epoll_(epoll)
+      // 初始化 client 的 fd 和 epoll event
+    : client_fd_(client_fd), client_event_{client_fd_, this}, 
+      // 初始化 timer 的 fd 和 epoll event
+      timer_(timer), epoll_(epoll), curr_parse_pos_(0)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
     isKeepAlive_ = true;
     // 初始化一些变量
     reset();
+    // 设置 timer epoll event
+    if(timer)
+        timer_event_ = {timer->getFd(), this};
 }
 
 HttpHandler::~HttpHandler()
@@ -609,10 +615,10 @@ bool HttpHandler::RunEventLoop()
         return false;
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
-    bool ret1 = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
+    bool ret1 = epoll_->modify(client_fd_, getClientEpollEvent(), getClientTriggerCond());
     bool ret2 = true;
     if(timer_)
-        ret2 = epoll_->modify(timer_->getFd(), this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+        ret2 = epoll_->modify(timer_->getFd(), getTimerEpollEvent(), getTimerTriggerCond());
     assert(ret1 && ret2);
 
     return true;

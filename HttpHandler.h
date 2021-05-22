@@ -44,7 +44,12 @@ public:
     int getClientFd()           { return client_fd_; }
     Epoll* getEpoll()           { return epoll_; }
     Timer* getTimer()           { return timer_; }
-    
+    // 获取 client_fd 和 timer_fd 所需要设置的 epoll 触发条件
+    int getClientTriggerCond() { return EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP; }
+    int getTimerTriggerCond()  { return EPOLLET | EPOLLIN | EPOLLONESHOT; }
+    // 获取 client 和 timer 的 epoll event
+    void* getClientEpollEvent() { return &client_event_; }
+    void* getTimerEpollEvent()  { return &timer_event_; }
 
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
@@ -110,8 +115,13 @@ private:
 
     // 相关描述符
     int client_fd_;
+    EpollEvent client_event_;
+
     Timer* timer_;
+    EpollEvent timer_event_;
+
     Epoll* epoll_;
+
     // http 请求包的所有数据
     string request_;
     // http 头部

@@ -29,6 +29,15 @@ std::ostream& logmsg(int flag);
 #define UNREACHABLE(x) do { assert(0 && "UNREACHABLE: "##x); } while(0)
 
 /**
+ * @brief 供epoll使用的结构体
+ */ 
+struct EpollEvent
+{
+    int fd;     // 被唤醒的 fd
+    void* ptr;  // 顺便携带的数据
+};
+
+/**
  * @brief  绑定一个端口号并返回一个 fd
  * @param  port 目标端口号
  * @return 运行正常则返回 fd, 否则返回 -1

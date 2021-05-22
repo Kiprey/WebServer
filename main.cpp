@@ -55,9 +55,9 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
              * @ref tcp 源码 https://elixir.bootlin.com/linux/v4.19/source/net/ipv4/tcp.c#L524
              * @ref TCP: When is EPOLLHUP generated? https://stackoverflow.com/questions/52976152/tcp-when-is-epollhup-generated
              */ 
-            bool ret1 = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
+            bool ret1 = epoll->add(client_fd, client_handler->getClientEpollEvent(), client_handler->getClientTriggerCond());
             // 设置定时器以边缘-单次触发方式
-            bool ret2 = epoll->add(timer->getFd(), client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
+            bool ret2 = epoll->add(timer->getFd(), client_handler->getTimerEpollEvent(), client_handler->getTimerTriggerCond());
             assert(ret1 && ret2);
             // 输出相关信息
             printConnectionStatus(client_fd, "-------->>>>> New Connection");
@@ -82,7 +82,8 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
  */
 void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_event* event)
 {
-    HttpHandler* handler = static_cast<HttpHandler*>(event->data.ptr);
+    EpollEvent* curr_epoll_event = static_cast<EpollEvent*>(event->data.ptr);
+    HttpHandler* handler = static_cast<HttpHandler*>(curr_epoll_event->ptr);
     // 处理一些错误事件
     int events_ = event->events;
     // 如果存在错误,或者不是因为 read 事件而被唤醒
@@ -157,16 +158,9 @@ int main(int argc, char* argv[])
     // 声明一个 epoll 实例,该实例将在整个main函数结束时被释放
     Epoll epoll(EPOLL_CLOEXEC);
     assert(epoll.isEpollValid());
-    /**
-     * 将 listen_fd 添加进 epoll 实例
-     * 这里构造了一个 HttpHandler 给 listen_fd.
-     * NOTE: 监听套接字实际上并没有处理 Http 报文
-     *       该HttpHandler的作用 **只是存放 listen_fd** .
-     *       listen_handler 将会在main函数结束前被释放(尽管main函数永不结束)
-     *       * . listen_fd 的Timer为nullptr
-     */
-    HttpHandler* listen_handler = new HttpHandler(&epoll, listen_fd, nullptr);
-    epoll.add(listen_fd, listen_handler, EPOLLET | EPOLLIN);
+    // 将 listen_fd 添加进 epoll 实例
+    EpollEvent* listen_epollevent = new EpollEvent{listen_fd, nullptr};
+    epoll.add(listen_fd, listen_epollevent, EPOLLET | EPOLLIN);
 
     // 开始事件循环
     for(;;)
@@ -198,8 +192,9 @@ int main(int argc, char* argv[])
         {
             // 获取事件相关的信息
             epoll_event&& event = epoll.getEvent(static_cast<size_t>(i));
-            HttpHandler* handler = static_cast<HttpHandler*>(event.data.ptr);
-            int fd = handler->getClientFd();
+            EpollEvent* curr_epoll_event = static_cast<EpollEvent*>(event.data.ptr);
+            
+            int fd = curr_epoll_event->fd;
             
             // 如果当前文件描述符是 listen_fd, 则建立连接
             if(fd == listen_fd)
@@ -208,7 +203,7 @@ int main(int argc, char* argv[])
                 handleOldConnection(&epoll, fd, &thread_pool, &event);
         }
     }
-    delete listen_handler;
+    delete listen_epollevent;
 
     return 0;
 }
