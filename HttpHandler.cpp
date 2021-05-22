@@ -34,13 +34,18 @@ HttpHandler::~HttpHandler()
     // 从 epoll 中删除该套接字相关的事件
     /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
     bool ret1 = epoll_->del(client_fd_);
-    bool ret2 = epoll_->del(timer_->getFd());
+    bool ret2 = true;
+    // 如果不是空定时器,则释放
+    if(timer_)
+    {
+        ret2 = epoll_->del(timer_->getFd());
+        // 删除定时器
+        delete timer_;
+    }
     assert(ret1 && ret2);
     // 关闭客户套接字
-    LOG(INFO) << "------------ Connection Closed (socket: " << client_fd_ << ")------------" << endl;
+    LOG(INFO) << "------------------------ Connection Closed (socket: " << client_fd_ << ")------------------------" << endl;
     close(client_fd_);
-    // 删除定时器
-    delete timer_;
 }
 
 void HttpHandler::reset()
@@ -53,18 +58,19 @@ void HttpHandler::reset()
     // 重设状态
     state_ = STATE_PARSE_URI;
     // 重置重试次数
-    againTimes_ = 0;
+    againTimes_ = maxAgainTimes;
     // 重置 headers_
     headers_.clear();
     // 重置 body
     http_body_.clear();
     // 重置超时时间
-    timer_->setTime(timeoutPerRequest, 0);
+    if(timer_)
+        timer_->setTime(timeoutPerRequest, 0);
 }
 
 HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 {
-    LOG(INFO) << "<<<<- Request Packet ->>>> " << endl;
+    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Request Packet ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
 
     char buffer[MAXBUF];
     
@@ -163,7 +169,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
 
 HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
 {
-    LOG(INFO) << "<<<<- Request Info ->>>> " << endl;
+    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Request Info ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
 
     size_t pos1, pos2;
     for(pos1 = curr_parse_pos_;
@@ -193,9 +199,6 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
 
         headers_[key] = value;
     }
-    // // 判断处理空 header 条目的 \r\n
-    // if((request_.size() < pos1 + 2) || (request_.substr(pos1, 2) != "\r\n"))
-    //     return ERR_BAD_REQUEST;
 
     // 执行到这里说明: 没有遍历到空头,即还有数据没有读完
     return ERR_AGAIN;
@@ -471,10 +474,10 @@ bool HttpHandler::handleErrorType(HttpHandler::ERROR_TYPE err)
         state_ = STATE_FATAL_ERROR;
         break;
     case ERR_AGAIN:
-        ++againTimes_;
+        --againTimes_;
         LOG(INFO) << "HTTP waiting for more messages... " << endl;
         /* 注意这里没有设置 STATE , 与 ERR_SUCESS一样 */
-        if(againTimes_ > maxAgainTimes)
+        if(againTimes_ <= 0)
         {
             state_ = STATE_FATAL_ERROR;
             LOG(ERROR) << "Reach max read times" << endl;
@@ -545,7 +548,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
 
     // 输出返回的数据
-    LOG(INFO) << "<<<<- Response Packet ->>>> " << endl;
+    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Response Packet ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
     LOG(INFO) << "{" << escapeStr(response, MAXBUF) << "}" << endl;
 
     if(len < 0 || static_cast<size_t>(len) != response.size())
@@ -607,7 +610,9 @@ bool HttpHandler::RunEventLoop()
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
     bool ret1 = epoll_->modify(client_fd_, this, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
-    bool ret2 = epoll_->modify(timer_->getFd(), this, EPOLLET | EPOLLIN | EPOLLONESHOT);
+    bool ret2 = true;
+    if(timer_)
+        ret2 = epoll_->modify(timer_->getFd(), this, EPOLLET | EPOLLIN | EPOLLONESHOT);
     assert(ret1 && ret2);
 
     return true;

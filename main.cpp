@@ -60,7 +60,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
             bool ret2 = epoll->add(timer->getFd(), client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT);
             assert(ret1 && ret2);
             // 输出相关信息
-            printConnectionStatus(client_fd, "New Connection");
+            printConnectionStatus(client_fd, "-------->>>>> New Connection");
         }
     }while(errno == EINTR || errno == ECONNABORTED);
     
@@ -98,6 +98,10 @@ void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_ev
     // 1. 如果是因为超时
     if(fd == handler->getTimer()->getFd())
     {
+        LOG(INFO) << "-------->>>>> New Message: "
+                  << "socket(" << handler->getClientFd() 
+                  << ") | timerfd(" << handler->getTimer()->getFd() 
+                  << ") timeout. " << endl;;
         /* 这里不像下面需要从epoll中关闭 timer fd
            因为 timer将会在HttpHandler的析构函数中从epoll内部删除 */
         // 删除 handler 实例
@@ -115,8 +119,7 @@ void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_ev
             {
                 HttpHandler* handler = static_cast<HttpHandler*>(arg);
 
-                int client_fd = handler->getClientFd();
-                printConnectionStatus(client_fd, "New Message");
+                printConnectionStatus(handler->getClientFd(), "-------->>>>> New Message");
 
                 // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
                 if(!(handler->RunEventLoop()))
