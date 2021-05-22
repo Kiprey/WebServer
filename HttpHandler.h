@@ -12,7 +12,13 @@ using namespace std;
 /**
  * @brief HttpHandler 类处理每一个客户端连接,并根据读入的http报文,动态返回对应的response
  *        其支持的 HTTP 版本为 HTTP/1.1
- * @note  该类只实现了部分异常处理,没有涵盖大部分的异常(不过暂时也够了)
+ * @todo:
+ *      1. 尽管writen是阻塞写入,但需要注意的是,阻塞写入可能会极大影响Server性能,因此最好使用 epoll 来写入
+ * @fixme: 
+ *      2. 大规模访问静态文件时,可能造成部分TCP连接处于close_wait状态,导致无法socket无法被关闭,
+ *         占用空间,但 epoll 没有检测到这类连接半关闭事件
+ *      3. 大规模访问CGI程序时,可能导致父进程无法杀死子进程,无法关闭管道,使得进程间通信管道占满整个进程空间
+ *      4. 大规模状态下,Timer超时处理程序可能存在问题,无法很好的完成工作
  */ 
 class HttpHandler
 {

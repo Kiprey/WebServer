@@ -503,26 +503,27 @@ bool HttpHandler::handleErrorType(HttpHandler::ERROR_TYPE err)
         state_ = STATE_ERROR;
         break;
     case ERR_NOT_FOUND:
-        LOG(ERROR) << "HTTP Not Found." << endl;
+        LOG(INFO) << "HTTP Not Found." << endl;
         sendErrorResponse("404", "Not Found");
         state_ = STATE_ERROR;
         break;
     case ERR_LENGTH_REQUIRED:
-        LOG(ERROR) << "HTTP Length Required." << endl;
+        LOG(INFO) << "HTTP Length Required." << endl;
         sendErrorResponse("411", "Length Required");
         state_ = STATE_ERROR;
         break;
     case ERR_NOT_IMPLEMENTED:
-        LOG(ERROR) << "HTTP Request method is not implemented." << endl;
+        LOG(INFO) << "HTTP Request method is not implemented." << endl;
         sendErrorResponse("501", "Not Implemented");
         state_ = STATE_ERROR;
         break;
     case ERR_INTERNAL_SERVER_ERR:
+        LOG(INFO) << "HTTP Internal Server Error." << endl;
         sendErrorResponse("500", "Internal Server Error");
         state_ = STATE_ERROR;
         break;
     case ERR_HTTP_VERSION_NOT_SUPPORTED:
-        LOG(ERROR) << "HTTP Request HTTP Version Not Supported." << endl;
+        LOG(INFO) << "HTTP Request HTTP Version Not Supported." << endl;
         sendErrorResponse("505", "HTTP Version Not Supported");
         state_ = STATE_ERROR;
         break;
@@ -550,7 +551,7 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
         sstream << responseBody;
 
     string&& response = sstream.str();
-    /// TODO: 尽管writen是阻塞写入,但需要注意的是,阻塞写入可能会极大影响Server性能,因此最好使用 epoll 来写入
+
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
 
     // 输出返回的数据
