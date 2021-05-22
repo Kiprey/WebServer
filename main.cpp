@@ -51,6 +51,11 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
              *        可以看出,现在指针已经满天飞了 2333
              */
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd);
+            /**
+             * @brief EPOLLRDHUP EPOLLHUP 不同点,前者是半关闭连接时出发,后者是完全关闭后触发
+             * @ref tcp 源码 https://elixir.bootlin.com/linux/v4.19/source/net/ipv4/tcp.c#L524
+             * @ref TCP: When is EPOLLHUP generated? https://stackoverflow.com/questions/52976152/tcp-when-is-epollhup-generated
+             */ 
             bool ret = epoll->add(client_fd, client_handler, EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP);
             assert(ret);
             // 输出相关信息

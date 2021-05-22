@@ -317,6 +317,11 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         }
         // 尝试执行该CGI程序
         pid_t pid;
+        /**
+         * @note 需要注意的是 fork 在多进程中要慎重使用
+         * @ref 谨慎使用多线程中的fork https://www.cnblogs.com/liyuan989/p/4279210.html
+         * @ref 程序员的自我修养（三）：fork() 安全 https://liam.page/2017/01/17/fork-safe/
+         */ 
         if((pid = fork()) < 0)
         {
             LOG(ERROR) << "Fork error. " << strerror(errno) << endl;
