@@ -293,6 +293,15 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         return sendResponse("200", "OK", MimeType::getMineType(suffix), responseBody);
     }
     // 而对于POST来说,将 http body 传入目标可执行文件并将结果返回给客户端
+    /**
+     * @brief 多进程调试
+     *  gdb: set follow-fork-mode parent
+     *       set detach-on-fork off
+     *  shell: 
+     *       查看某个进程的pid:          ps ax | grep "WebServer" 
+     *       查看某个pid的文件描述符列表:  lsof -p <PID>
+     *       查看WebServer的所有子进程:  pstree -p -g <WebServerPID>
+     */
     else if(method_ == METHOD_POST)
     {
         // 创建两个管道
@@ -316,6 +325,21 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         // 对于子进程来说
         if(pid == 0)
         {
+            /**
+             * 将当前进程的进程号设置为所在组的进程组的组号
+             * 这有助于WebServer 杀死子进程
+             * 
+             * kill -pid 时会杀死 PGID为 `-pid` 的所有子进程
+             * 因此可以利用 setpgid 来达到区分进程的目的
+             * 
+             * 正常来说,如果没有设置 setpgid,则WebServer所有的子进程,以及子进程的子进程
+             * 其PGID都为WebServer的PID,这为杀死 pid为某个特定值的子进程以及该子进程的子进程巨大障碍
+             * 因此在子进程处需要重新设置 pgid
+             */
+            // 正常来说, setpgid 不可能会失败.如果失败了就直接abort
+            // 因为设置失败将会导致该子进程无法受到父进程的超时限制
+            if(setpgid(0, 0))
+                abort();
             // 首先重新设置标准输入输出流
             if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
                 exit(EXIT_FAILURE);
@@ -326,40 +350,76 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
 
             // 执行
             const char* path = path_.c_str();
+            // 注意,由于不需要从path中获取文件地址,因此这里使用的exec函数不是p系列的
             execl(path, path, nullptr);
             exit(EXIT_FAILURE);
         }
         // 对于父进程WebServer来说
-        /// TODO: 可能造成 broken pipe 以及大量无法关闭的 fd
         else
         {
             close(cgi_input[0]);
             close(cgi_output[1]);
 
-            /// TODO: 确保数据成功写入
             ssize_t len = writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
             // 这里确保写入正确
             assert(len >= 0 && static_cast<size_t>(len) == http_body_.length());
 
             close(cgi_input[1]);
 
-            int wstats;
             // 设置超时时间 maxCGIRuntime(ms)
             int timeouts = maxCGIRuntime;
-            bool isExit = false;
-            while(timeouts > 0 && !isExit)
+            /**
+             * @brief 进入一个死循环,只有当子进程退出后才会break
+             * @note 该循环将会有2条执行流程
+             *          1. 执行子进程 -> waitpid -> 子进程退出 -> 结束循环;
+             *          2. 执行子进程 -> waitpid -> 子进程没有退出
+             *              -> 超时 -> kill -> waitpid -> 子进程退出 -> 结束循环;
+             */
+            while(true)
             {
                 // 单次休息 cgiStepTime(ms)
                 if(!usleep(cgiStepTime * 1000))
                     timeouts -= cgiStepTime;
-                if(waitpid(pid, &wstats, WNOHANG) < -1)
+                int wstats = -1;
+                int waitpid_ret = waitpid(pid, &wstats, WNOHANG);
+                // 如果waitpid 出错
+                if(waitpid_ret < 0)
+                {
                     LOG(ERROR) << "waitpid error. " << strerror(errno) << endl;
-                // 将执行结果放入该 bool 值中
-                isExit = WIFEXITED(wstats);
+                    // ret 前,一定一定一定要关闭这个读取端口
+                    close(cgi_output[0]);
+                    return ERR_INTERNAL_SERVER_ERR;
+                }
+                // 如果子进程状态被修改, 当子进程状态改变后,waitpid 才会设置 status, 否则 status 不变
+                else if(waitpid_ret > 0)
+                {
+                    // 只有在子进程自然退出,或者子进程被 kill 时,才会处理,退出该循环
+                    // 至于其他情况,例如子进程遇到了 SIGINT,则忽视
+                    bool ifExited = WIFEXITED(wstats);
+                    // 注意 SIGKILL 会 terminate 子进程,因此使用 WTERMSIG 来获取TERSIG
+                    // 这里不指定是 SIGKILL信号,因为可能有其他信号会kill子进程
+                    bool ifKilled = WIFSIGNALED(wstats) && (WTERMSIG(wstats) != 0);
+                    if(ifExited || ifKilled)
+                        break;
+                }
+                // 如果什么也没有发生, 即子进程仍然在跑.如果顺便超时了,则kill
+                else if(timeouts <= 0)
+                {
+                    /** 
+                     * @brief 把 kill 放到循环内部是为了 waitpid 回收子进程
+                     * NOTE: -pid 指的是杀死当前子进程以及该子进程自身的子进程,例如shell脚本
+                     * NOTE: 再kill一次 pid 是为了防止子进程太久没有轮到执行,仍然处于fork与execl之间的状态
+                     *       此时,之前的 kill -pid 将会不起作用.因此为了确保子进程一定被kill,需要再kill一次pid
+                     */        
+                    int res_kill_sub = kill(pid, SIGKILL);
+                    int res_kill_pgid = 0;
+                    // 只有在子进程的pgid变化后才kill -pid,防止误伤其他线程中的子进程
+                    if(getpgid(pid) == pid)
+                        res_kill_pgid = kill(-pid, SIGKILL);
+                    assert(!res_kill_sub && !res_kill_pgid);
+                    LOG(ERROR) << "Sub process timeout." << endl;
+                }
             }
-            // 如果超时了但仍然没有执行完,则直接kill
-            if(!isExit)
-                kill(pid, SIGKILL);
 
             string responseBody;
             char buf[MAXBUF];
