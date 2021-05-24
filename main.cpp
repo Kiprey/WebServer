@@ -47,6 +47,8 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
             if(!timer->isValid())
             {
                 delete timer;
+                // 一定要记得关闭已经开启的连接
+                close(client_fd);
                 break;
             }
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd, timer);
