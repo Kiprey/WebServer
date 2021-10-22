@@ -104,10 +104,17 @@ void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_ev
     HttpHandler* handler = static_cast<HttpHandler*>(curr_epoll_event->ptr);
     // 处理一些错误事件
     int events_ = event->events;
-    // 如果存在错误,或者不是因为 read 事件而被唤醒
-    if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || (events_ & EPOLLRDHUP) || !(events_ & EPOLLIN))
-    {
-        INFO("Socket(%d) was closed by peer / error.", handler->getClientFd());
+    // 如果远程关闭了当前连接
+    if ((events_ & EPOLLHUP) || (events_ & EPOLLRDHUP)) {
+        INFO("Socket(%d) was closed by peer.", handler->getClientFd());
+        // 当某个 handler 无法使用时,一定要销毁内存
+        delete handler;
+        // 之后重新开始遍历新的事件.
+        return;
+    }
+    // 如果当前 socket / events_ 存在错误
+    else if ((events_ & EPOLLERR) || !(events_ & EPOLLIN)) {
+        ERROR("Socket(%d) error.", handler->getClientFd());
         // 当某个 handler 无法使用时,一定要销毁内存
         delete handler;
         // 之后重新开始遍历新的事件.

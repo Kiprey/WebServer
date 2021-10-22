@@ -16,6 +16,8 @@
 // 全局日志输出锁
 extern MutexLock global_log_lock;
 
+#if 1
+// 开启所有输出
 #define INFO(x...) do { \
     MutexLockGuard log_guard(global_log_lock);    \
     fprintf(stdout, "(Thread %lx): ", syscall(SYS_gettid));  \
@@ -49,6 +51,16 @@ extern MutexLock global_log_lock;
     fflush(stderr);    \
     abort(); \
   } while (0)
+
+#else
+
+// 关闭所有输出
+#define INFO(x...) 
+#define WARN(x...)
+#define ERROR(x...) 
+#define FATAL(x...) 
+
+#endif
 
 /**
  * @brief 调试用,表示某个代码区域不应该到达
