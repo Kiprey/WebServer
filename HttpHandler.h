@@ -12,13 +12,6 @@ using namespace std;
 /**
  * @brief HttpHandler 类处理每一个客户端连接,并根据读入的http报文,动态返回对应的response
  *        其支持的 HTTP 版本为 HTTP/1.1
- * @todo:
- *      1. 尽管writen是阻塞写入,但需要注意的是,阻塞写入可能会极大影响Server性能,因此最好使用 epoll 来写入
- * @fixme: 
- *      2. 大规模访问静态文件时,可能造成部分TCP连接处于close_wait状态,导致无法socket无法被关闭,
- *         占用空间,但 epoll 没有检测到这类连接半关闭事件
- *      3. 大规模访问CGI程序时,可能导致父进程无法杀死子进程,无法关闭管道,使得进程间通信管道占满整个进程空间
- *      4. 大规模状态下,Timer超时处理程序可能存在问题,无法很好的完成工作
  */ 
 class HttpHandler
 {
@@ -99,7 +92,6 @@ private:
     enum HTTP_VERSION{
         HTTP_1_0,           // HTTP/1.0
         HTTP_1_1,           // HTTP/1.1
-        HTTP_UNSUPPORT      // 不支持的HTTP版本
     };
 
     // 支持的请求方式
@@ -203,7 +195,7 @@ private:
 
     /**
      * @brief 处理传入的错误类型
-     * @param 错误类型
+     * @param err 错误类型
      * @return 如果传入 ERR_SUCCESS 则返回 true,否则返回 false
      */
     bool handleErrorType(ERROR_TYPE err);
@@ -268,8 +260,8 @@ public:
 
     static string getMineType(string suffix)
     {
-        static MimeType* _mimeTy = new MimeType();
-        return _mimeTy->getMineType_(suffix);
+        static MimeType _mimeTy;
+        return _mimeTy.getMineType_(suffix);
     }
 };
 

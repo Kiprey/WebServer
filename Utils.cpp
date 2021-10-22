@@ -85,7 +85,7 @@ bool setSocketNoDelay(int fd)
     return true;
 }
 
-ssize_t readn(int fd, void* buf, size_t len, bool isRead)
+ssize_t readn(int fd, void* buf, size_t len)
 {
     // 这里将 void* 转换成 char* 是为了在下面进行自增操作
     char *pos = (char*)buf;
@@ -93,13 +93,9 @@ ssize_t readn(int fd, void* buf, size_t len, bool isRead)
     ssize_t readNum = 0;
     while(leftNum > 0)
     {
-        ssize_t tmpRead = 0;
         // 尝试循环读取,如果报错,则进行判断
         // 注意, read 的返回值为0则表示读取到 EOF,是正常现象
-        if(isRead)
-            tmpRead = read(fd, pos, leftNum);
-        else
-            tmpRead = recv(fd, pos, leftNum, MSG_DONTWAIT);
+        ssize_t tmpRead = read(fd, pos, leftNum);
         
         if(tmpRead < 0)
         {
@@ -220,4 +216,21 @@ bool isNumericStr(string str)
         if(!isdigit(str[i]))
             return false;
     return true;
+}
+
+size_t closeRemainingConnect(int listen_fd, int* idle_fd) {
+    close(*idle_fd);
+
+    size_t count = 0;
+    for(;;) {
+        int client_fd = accept4(listen_fd, nullptr, nullptr, 
+                SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if(client_fd == -1 && errno == EAGAIN)
+            break;
+        close(client_fd);
+        ++count;
+    }
+    // 重新恢复空闲描述符
+    *idle_fd = open("/dev/null", O_RDONLY | O_CLOEXEC); 
+    return count;
 }

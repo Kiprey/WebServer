@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -83,32 +84,18 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
     while(true)
     {
         // 非阻塞,使用 recv 读取
-        ssize_t len = readn(client_fd_, buffer, MAXBUF, false);
-        if(len < 0)
-            return ERR_READ_REQUEST_FAIL;
-        /** 
-         * 如果此时没读取到信息并且之前已经读取过信息了,则直接返回.
-         * 这里需要注意,有些连接可能会提前连接过来,但是不会马上发送数据.因此需要阻塞等待
-         * 这里有个坑点: chromium在每次刷新过后,会额外开一个连接,用来缩短下次发送请求的时间
-         * 也就是说这里大概率会出现空连接,即连接到了,但是不会马上发送数据,而是等下一次的请求.
-         * 
-         * 如果读取到的字节数为0,则说明远程连接已经被关闭.
-         */
-        else if(len == 0)
-        {
+        ssize_t len = recv(client_fd_, buffer, MAXBUF, MSG_DONTWAIT);
+        if(len < 0) {
             // 读取时没有出错
             if(errno == EAGAIN)
                 return ERR_SUCCESS;
-            /** 
-             * 否则,如果此时没读取到数据,则表示远程连接已经被关闭
-             * 如果是正常断开连接,则此时的 errno 应该为 SUCCESS, 因为没有触发错误
-             * 如果收到了远程的 RST,则 errno 为 ENOENT
-             * NOTE: 需要注意的是, 当远程连接关闭时,有几率会导致下一次readn时仍然返回 EAGAIN
-             *       即重复返回 EAGAIN,因此需要设置一个 againTime
-             *       最好有个进一步的处理
-             */
-            assert(errno == 0 || errno == ENOENT); 
-            // 不管怎样,直接关闭连接
+            else if(errno == EINTR)
+                continue;
+            return ERR_READ_REQUEST_FAIL;
+        }
+        else if(len == 0)
+        {
+            // 如果读取到的字节数为0,则说明 EOF, 远程连接已经被关闭
             return ERR_CONNECTION_CLOSED;
         }
         // LOG(INFO) << "Read data: " << buffer << endl;
@@ -254,17 +241,11 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
     struct stat st;
     if(stat(path_.c_str(), &st) == -1)
     {
+        LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << strerror(errno) << endl;
         if(errno == ENOENT)
-        {
-            LOG(ERROR) << "file [" << path_ << "] not found." << endl;
             return ERR_NOT_FOUND;
-        }
         else
-        {
-            LOG(ERROR) << "Can not get file [" << path_ << "] state ! " 
-                << strerror(errno) << endl;
             return ERR_INTERNAL_SERVER_ERR;
-        }
     }
 
     // 开始处理请求
@@ -275,9 +256,13 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         int file_fd;
         if((file_fd = open(path_.c_str(), O_RDONLY, 0)) == -1)
         {
-            // 如果打开失败,则返回404
             LOG(ERROR) << "File [" << path_ << "] open failed ! " << strerror(errno) << endl;
-            return ERR_NOT_FOUND;
+            if(errno == ENOENT)
+                // 如果打开失败,则返回404
+                return ERR_NOT_FOUND;
+            else
+                // 如果是因为其他问题出错，则返回500
+                return ERR_INTERNAL_SERVER_ERR;
         }  
         // 读取文件, 使用 mmap 来高速读取文件
         void* addr = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
@@ -327,6 +312,9 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         }
         if (pipe(cgi_input) == -1) {
             LOG(ERROR) << "cgi_output create error. " << strerror(errno) << endl;
+            // 记得关闭之前的管道
+            close(cgi_output[0]);
+            close(cgi_output[1]);
             return ERR_INTERNAL_SERVER_ERR;
         }
         // 尝试执行该CGI程序
@@ -339,6 +327,10 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         if((pid = fork()) < 0)
         {
             LOG(ERROR) << "Fork error. " << strerror(errno) << endl;
+            close(cgi_input[0]);
+            close(cgi_input[1]);
+            close(cgi_output[0]);
+            close(cgi_output[1]);
             return ERR_INTERNAL_SERVER_ERR;
         }
         // 对于子进程来说
@@ -360,17 +352,20 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             if(setpgid(0, 0))
                 abort();
             // 首先重新设置标准输入输出流
+            // 注意 dup2 会自动关闭当前打开的 fd0 和 fd1
             if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
                 exit(EXIT_FAILURE);
             close(cgi_input[0]);
             close(cgi_input[1]);
             close(cgi_output[0]);
             close(cgi_output[1]);
+            // 设置当父进程死亡时，子进程同步死亡
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
 
             // 执行
             const char* path = path_.c_str();
             // 注意,由于不需要从path中获取文件地址,因此这里使用的exec函数不是p系列的
-            execl(path, path, nullptr);
+            execl(path, path, environ);
             exit(EXIT_FAILURE);
         }
         // 对于父进程WebServer来说
@@ -379,6 +374,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             close(cgi_input[0]);
             close(cgi_output[1]);
 
+            // 将 HTTP body 写入 CGI 程序的标准输入中
             ssize_t len = writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
             // 这里确保写入正确
             assert(len >= 0 && static_cast<size_t>(len) == http_body_.length());
@@ -440,6 +436,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
                 }
             }
 
+            // 走到这里则说明程序已经执行结束了
             string responseBody;
             char buf[MAXBUF];
             // 非阻塞读取
@@ -449,7 +446,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
                 close(cgi_output[0]);
                 return ERR_INTERNAL_SERVER_ERR;
             }
-            while((len = readn(cgi_output[0], buf, MAXBUF, true)) > 0)
+            while((len = readn(cgi_output[0], buf, MAXBUF)) > 0)
                 responseBody += string(buf, buf + len);
             close(cgi_output[0]);
 

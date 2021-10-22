@@ -6,6 +6,15 @@
 
 using namespace std;
 
+/**
+ * @brief 供epoll使用的结构体
+ */ 
+struct EpollEvent
+{
+    int fd;     // 被唤醒的 fd
+    void* ptr;  // 顺便携带的数据
+};
+
 class Epoll
 {
 public:

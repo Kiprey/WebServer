@@ -77,17 +77,27 @@ WebServer-1.1 暂时没有运行时截图，不过也和 WebServer-1.0 差不多
 
 WebServer1.1技术文档因为时间原因暂时没有完成，但主要的技术细节已经以大量注释的形式写入了源代码中，可以直接阅读源代码来理解。
 
-## 四、待完成任务
+## 四、测试方式
 
-当前的WebServer-1.1为 beta 测试版本，并非正式版本。因为时间的限制，仍然有一部分工作没有完成、bug没有解决。待这部分工作完成后，即为正式发布的 WebServer-1.1 版本。
+- 单个测试
 
-### 1. FIXME
+  ```bash
+  # GET 请求
+  curl http://localhost:8012/html/index.html
+  curl -d <http_body> http://localhost:8012/html/CGI/base64script
+  # POST 请求
 
-- 大规模访问静态文件时,可能造成部分TCP连接处于close_wait状态，导致无法socket无法被关闭，占用大量文件描述符，但 epoll 没有检测到这类连接半关闭事件。
-- 大规模访问CGI程序时，可能导致父进程无法杀死子进程，无法关闭管道，使得进程间通信管道占满整个进程空间。
-- 大规模状态下，Timer超时处理程序可能存在问题，无法很好的完成工作。
+  ```
 
-### 2. TODO
+- 使用 apache 测试工具 `ab` 来进行大批量测试
 
-- HttpHandler类中，尽管writen是阻塞写入,但需要注意的是,阻塞写入可能会极大影响Server性能,需要重新编写相关逻辑，切换为使用 epoll 来进行非阻塞写入。
-- WebServer-1.1技术文档的编写。
+  ```bash
+  # -c 并发数
+  # -n 总请求数
+  # -s 单个请求的超时时间
+
+  # GET 测试
+  ab -c 500 -n 10000 -s 300 http://127.0.0.1:8012/html/index.html
+  # POST 测试
+  ab -c 500 -n 10000 -s 300 -p ignore_post.txt http://127.0.0.1:8012/html/CGI/base64script
+  ```

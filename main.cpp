@@ -1,7 +1,9 @@
+#include <fcntl.h>
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "Epoll.h"
@@ -16,12 +18,11 @@ using namespace std;
  * @param epoll     存放新连接的Epoll类实例 
  * @param listen_fd 新连接所对应的 listen 描述符
  */ 
-void handleNewConnections(Epoll* epoll, int listen_fd)
+void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd)
 {
     // 注意:可能会有很多个 connect 动作,但只会有一个 event
     sockaddr_in client_addr;
     socklen_t client_addr_len = 0;
-    int client_fd = -1;
     
     /**
      *  如果 
@@ -30,23 +31,48 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
      *      3. accept 发生了 ECONNABORTED 错误(该错误是远程连接被中断)
      *  则重新循环. 其中第三点, 若发生了 aborted 错误,则继续循环接受下一个socket 的请求
      */
-    do{
-        while((client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, 
-                SOCK_NONBLOCK | SOCK_CLOEXEC)) != -1)
-        {
+    for(;;) {
+        int client_fd = accept4(listen_fd, (sockaddr*)&client_addr, &client_addr_len, 
+                SOCK_NONBLOCK | SOCK_CLOEXEC);
+        // accept 的错误处理
+        if(client_fd == -1) {
+            // 如果是因为一些无关的错误所阻断，则继续 accept
+            if(errno == EINTR || errno == ECONNABORTED)
+                continue;
+            // 正常情况下,如果处理了所有的 accept后, errno == EAGAIN，则直接退出
+            else if (errno == EAGAIN)
+                break;
+            // 如果由于文件描述符不够用了,则会返回 EMFILE，此时清空全部的尚未 accept 连接
+            else if(errno == EMFILE) {
+                LOG(ERROR) << "No reliable pipes ! " << endl;
+                closeRemainingConnect(listen_fd, idle_fd);
+                break;
+            }
+            // 如果是其他的错误，则输出信息
+            else {
+                LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
+            }
+        }
+        // 如果 accept 正常
+        else {
             /** 构建一个新的 HttpHandler,并放入 epoll 实例中
              *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
              *  且每个套接字只会被一个线程处理
-             *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close
+             *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close + 下面的 timer 异常处理中被关闭
              *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
              *        每个 Timer 在此处创建, 在 HttpHandler 中被释放
              *        可以看出,现在指针已经满天飞了 2333
              */
             Timer* timer = new Timer(TFD_NONBLOCK | TFD_CLOEXEC);
-            // 如果timer创建失败,则直接break; 注意timer创建失败后会自动设置 errno
+            // 如果timer创建失败,则清空当前所有尚未 accept 的连接，因为文件描述符满
             if(!timer->isValid())
             {
                 delete timer;
+                // 直接关闭，告诉远程这里放不下了
+                close(client_fd);
+
+                LOG(ERROR) << "No reliable pipes ! " << endl;
+                closeRemainingConnect(listen_fd, idle_fd);
                 break;
             }
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd, timer);
@@ -62,15 +88,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd)
             // 输出相关信息
             printConnectionStatus(client_fd, "-------->>>>> New Connection");
         }
-    }while(errno == EINTR || errno == ECONNABORTED);
-    
-    // accept 的错误处理
-    // 正常情况下,如果处理了所有的 accept后, errno == EAGAIN
-    // 但是如果由于文件描述符不够用了,则会返回 EMFILE,此时只需等待下次连接时一并处理即可
-    if(errno == EMFILE)
-        LOG(ERROR) << "No reliable pipes ! " << endl;
-    else if(errno != EAGAIN)
-        LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
+    }
 }
 
 /**
@@ -141,12 +159,15 @@ int main(int argc, char* argv[])
     int port = atoi(argv[1]);
     if(argc > 2)
         HttpHandler::setWWWPath(argv[2]);
-
+    // 输出当前进程的 PID，便于调试
+    LOG(INFO) << "PID: " << getpid() << endl;
     // 忽略 SIGPIPE 信号
     handleSigpipe();
     // 创建线程池
     ThreadPool thread_pool(8);
 
+    // 空闲 fd，用于关闭溢出的文件描述符
+    int idle_fd = open("/dev/null", O_RDONLY | O_CLOEXEC); 
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)
     {
@@ -198,7 +219,7 @@ int main(int argc, char* argv[])
             
             // 如果当前文件描述符是 listen_fd, 则建立连接
             if(fd == listen_fd)
-                handleNewConnections(&epoll, listen_fd);
+                handleNewConnections(&epoll, listen_fd, &idle_fd);
             else
                 handleOldConnection(&epoll, fd, &thread_pool, &event);
         }

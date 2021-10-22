@@ -29,15 +29,6 @@ std::ostream& logmsg(int flag);
 #define UNREACHABLE(x) do { assert(0 && "UNREACHABLE: "##x); } while(0)
 
 /**
- * @brief 供epoll使用的结构体
- */ 
-struct EpollEvent
-{
-    int fd;     // 被唤醒的 fd
-    void* ptr;  // 顺便携带的数据
-};
-
-/**
  * @brief  绑定一个端口号并返回一个 fd
  * @param  port 目标端口号
  * @return 运行正常则返回 fd, 否则返回 -1
@@ -62,18 +53,17 @@ bool setFdNoBlock(int fd);
 bool setSocketNoDelay(int fd);
 
 /**
- * @brief   非阻塞模式 read/recv的wrapper
+ * @brief   非阻塞模式 read 的wrapper
  * @param   fd  源文件描述符
  * @param   buf 缓冲区地址
  * @param   len 目标读取的字节个数
- * @param   isRead  启用 read 函数
  * @return  成功读取的长度
  * @note    内部函数在错误时会生成 errno
  * @note    非阻塞模式下,无论有没有读取到数据,都会马上返回
- * @note    默认情况下, 启用非阻塞模式的recv函数(注意启用前必须已经设置 socket 为阻塞模式)
- * @note    recv函数与read函数的不同之处在于,recv专为socket而生,支持更多的错误处理
+ * @note    readn 不能用于替代 recv
+ *          因为当 readn 返回0时，调用者无法知道是连接关闭，还是当前暂时无数据可读
  */
-ssize_t readn(int fd, void* buf, size_t len, bool isRead = false);
+ssize_t readn(int fd, void* buf, size_t len);
 
 /**
  * @brief   write/send的wrapper
@@ -84,6 +74,7 @@ ssize_t readn(int fd, void* buf, size_t len, bool isRead = false);
  * @return  成功读取的长度
  * @note    内部函数在错误时会生成 errno
  * @note    该函数将 **阻塞** 写入数据, 除非有其他错误发生
+ * @note    writen 可以用于替代 send 进行阻塞写入操作
  */
 ssize_t writen(int fd, const void* buf, size_t len, bool isWrite = false);
 
@@ -115,5 +106,13 @@ string escapeStr(const string& str, size_t MAXBUF);
  * @return true 表示字符串全为数字, 否则返回false
  */
 bool isNumericStr(string str);
+
+/**
+ * @brief 清空当前剩余尚未 accept 的连接
+ * @param listen_fd 当前所监听的文件描述符
+ * @param idle_fd 空闲的文件描述符
+ * @return 返回清空的连接数量
+ */ 
+size_t closeRemainingConnect(int listen_fd, int* idle_fd);
 
 #endif
