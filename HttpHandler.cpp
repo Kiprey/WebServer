@@ -356,8 +356,11 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
              */
             // 正常来说, setpgid 不可能会失败.如果失败了就直接abort
             // 因为设置失败将会导致该子进程无法受到父进程的超时限制
-            if(setpgid(0, 0))
-                abort();
+            if(setpgid(0, 0) == -1)
+                FATAL("setpgid fail in child process! (%s)", strerror(errno));
+            // 设置当父进程死亡时，子进程同步死亡
+            if(prctl(PR_SET_PDEATHSIG, SIGKILL) == -1)
+                FATAL("prctl fail in child process! (%s)", strerror(errno));
             // 首先重新设置标准输入输出流
             // 注意 dup2 会自动关闭当前打开的 fd0 和 fd1
             if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
@@ -366,14 +369,24 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             close(cgi_input[1]);
             close(cgi_output[0]);
             close(cgi_output[1]);
-            // 设置当父进程死亡时，子进程同步死亡
-            prctl(PR_SET_PDEATHSIG, SIGKILL);
+
+            // 准备参数
+            char path[path_.size() + 1];
+            strcpy(path, path_.c_str());
+            char* const args[] = { path, NULL };
+
+            /**
+             * 此时已经完成了所有的准备，现在准备执行目标程序
+             * 但在执行目标程序之前，需要先通知父进程，以说明当前程序的 stdin 和 stdout 已经准备就绪，可以输入数据
+             * 从已经替换为管道的 stdin(pipe) 写入数据
+             * NOTE: 这一步通知父进程的操作相当重要，因为可以避免条件竞争
+             */
+            write(1, "HELO", 4);
 
             // 执行
-            const char* path = path_.c_str();
-            // 注意,由于不需要从path中获取文件地址,因此这里使用的exec函数不是p系列的
-            execl(path, path, environ);
-            exit(EXIT_FAILURE);
+            execve(path, args, environ);
+            // 如果执行到这里，则说明出现了问题
+            FATAL("execve fail in child process! (%s)", strerror(errno));
         }
         // 对于父进程WebServer来说
         else
@@ -381,10 +394,21 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             close(cgi_input[0]);
             close(cgi_output[1]);
 
+            // 等待子进程发送的握手信号
+            char helo_buf[4];
+            if(read(cgi_output[0], helo_buf, 4) != 4) {
+                // 子进程出现了未知错误，导致握手失败，需要立即终止剩余操作
+                close(cgi_input[1]);
+                close(cgi_output[0]);
+                ERROR("Child process handshake fail! (%s)", strerror(errno));
+                return ERR_INTERNAL_SERVER_ERR;
+            }
+
             // 将 HTTP body 写入 CGI 程序的标准输入中
             ssize_t len = writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
-            // 这里确保写入正确
-            assert(len >= 0 && static_cast<size_t>(len) == http_body_.length());
+            // 如果写入失败
+            if(len <= 0)
+                WARN("Write %ld bytes to CGI input fail! (%s)", http_body_.length(), strerror(errno));
 
             close(cgi_input[1]);
 
