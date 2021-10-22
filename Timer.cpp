@@ -6,8 +6,8 @@
 
 Timer::Timer(int flag, time_t sec, long nsec) : timer_fd_(-1)
 {
-    create(flag);
-    setTime(sec, nsec);
+    if(create(flag))
+        setTime(sec, nsec);
 }
 
 Timer::~Timer()
@@ -35,10 +35,7 @@ bool Timer::create(int flag)
 {
     // 这里使用 CLOCK_BOOTTIME **相对时间**, 排除了系统时间与系统休眠时间的干扰
     if(!isValid() && ((timer_fd_ = timerfd_create(CLOCK_BOOTTIME, flag)) == -1))
-    {
-        WARN("Create Timer fail! (%s)", strerror(errno));
         return false;
-    }
     return true;
 }
 
@@ -51,10 +48,7 @@ bool Timer::setTime(time_t sec, long nsec)
     timerspec.it_value.tv_nsec = nsec;
     timerspec.it_value.tv_sec = sec;
     if(!isValid() || (timerfd_settime(timer_fd_, 0, &timerspec, nullptr) == -1))
-    {
-        WARN("Timer setTime fail! (%s)", strerror(errno));
         return false;
-    }
     return true;
 }
 

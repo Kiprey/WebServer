@@ -45,8 +45,8 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd)
                 break;
             // 如果由于文件描述符不够用了,则会返回 EMFILE，此时清空全部的尚未 accept 连接
             else if(errno == EMFILE) {
-                WARN("No reliable pipes ! ");
-                closeRemainingConnect(listen_fd, idle_fd);
+                int closed_conn_num = closeRemainingConnect(listen_fd, idle_fd);
+                WARN("No reliable pipes in new connection, close %d conns", closed_conn_num);
                 break;
             }
             // 如果是其他的错误，则输出信息
@@ -70,9 +70,9 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd)
                 delete timer;
                 // 直接关闭，告诉远程这里放不下了
                 close(client_fd);
-
-                WARN("No reliable pipes ! ");
-                closeRemainingConnect(listen_fd, idle_fd);
+                
+                int closed_conn_num = closeRemainingConnect(listen_fd, idle_fd);
+                WARN("No reliable pipes in new connection, close %d conns", closed_conn_num);
                 break;
             }
             HttpHandler* client_handler = new HttpHandler(epoll, client_fd, timer);
