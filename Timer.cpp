@@ -1,5 +1,6 @@
 #include <unistd.h>
 
+#include "Log.h"
 #include "Timer.h"
 #include "Utils.h"
 
@@ -35,7 +36,7 @@ bool Timer::create(int flag)
     // 这里使用 CLOCK_BOOTTIME **相对时间**, 排除了系统时间与系统休眠时间的干扰
     if(!isValid() && ((timer_fd_ = timerfd_create(CLOCK_BOOTTIME, flag)) == -1))
     {
-        LOG(ERROR) << "Create Timer fail! " << strerror(errno) << endl;
+        WARN("Create Timer fail! (%s)", strerror(errno));
         return false;
     }
     return true;
@@ -51,7 +52,7 @@ bool Timer::setTime(time_t sec, long nsec)
     timerspec.it_value.tv_sec = sec;
     if(!isValid() || (timerfd_settime(timer_fd_, 0, &timerspec, nullptr) == -1))
     {
-        LOG(ERROR) << "Timer setTime fail! " << strerror(errno) << endl;
+        WARN("Timer setTime fail! (%s)", strerror(errno));
         return false;
     }
     return true;
@@ -75,7 +76,7 @@ timespec Timer::getNextTimeout()
     itimerspec nextTime;
     if(!isValid() || (timerfd_gettime(timer_fd_, &nextTime) == -1))
     {
-        LOG(ERROR) << "Timer getNextTimeout fail! " << strerror(errno) << endl;
+        ERROR("Timer getNextTimeout fail! (%s)", strerror(errno));
         timespec ret;
         ret.tv_nsec = ret.tv_sec = -1;
         return ret;

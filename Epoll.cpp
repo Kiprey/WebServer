@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include "Epoll.h"
+#include "Log.h"
 
 Epoll::Epoll(int flag) : epoll_fd_(-1)
 {
@@ -25,7 +26,7 @@ bool Epoll::create(int flag)
     if(!isEpollValid()
         && ((epoll_fd_ = epoll_create1(flag)) == -1))
     {
-        LOG(ERROR) << "Create Epoll fail! " << strerror(errno) << endl;
+        ERROR("Create Epoll fail! (%s)", strerror(errno));
         return false;
     }
     return true;

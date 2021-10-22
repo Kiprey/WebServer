@@ -12,23 +12,6 @@ using std::string;
 using std::ostream;
 
 /**
- * @brief   输出信息相关宏定义与函数
- *          使用 `LOG(INFO) << "msg";` 形式以执行信息输出.
- * @note    注意: 该宏功能尚未完备,多线程下使用LOG宏将会导致输出数据混杂
- */
-#define INFO    1           /* 普通输出 */
-#define ERROR   2           /* 错误输出 */
-// #define LOG(x)  ostream(nullptr)
-#define LOG(x)  logmsg(x)   /* 调用输出函数 */
-std::ostream& logmsg(int flag);
-
-/**
- * @brief 调试用,表示某个代码区域不应该到达
- * @param x 可输出的信息
- */
-#define UNREACHABLE(x) do { assert(0 && "UNREACHABLE: "##x); } while(0)
-
-/**
  * @brief  绑定一个端口号并返回一个 fd
  * @param  port 目标端口号
  * @return 运行正常则返回 fd, 否则返回 -1

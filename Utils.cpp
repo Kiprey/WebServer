@@ -9,30 +9,9 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "Log.h"
 #include "MutexLock.h"
 #include "Utils.h"
-
-ostream& logmsg(int flag)
-{
-    // 输出信息时,设置线程互斥
-    // 获取线程 TID
-    long tid = syscall(SYS_gettid);
-    if(flag == ERROR)
-    {
-        cerr << tid << ": [ERROR]\t";
-        return cerr;       
-    }
-    else if(flag == INFO)
-    {
-        cout << tid << ": [INFO]\t";
-        return cout;
-    }
-    else
-    {
-        logmsg(ERROR) << "错误的 LOG 选择" << endl;
-        abort();
-    }
-}
 
 int socket_bind_and_listen(int port)
 {
@@ -159,7 +138,7 @@ void handleSigpipe()
     sa.sa_handler = SIG_IGN;
     sa.sa_flags = 0;
     if(sigaction(SIGPIPE, &sa, NULL) == -1)
-        LOG(ERROR) << "Ignore SIGPIPE failed! " << strerror(errno) << endl;
+        ERROR("Ignore SIGPIPE failed! (%s)", strerror(errno));
 }
 
 void printConnectionStatus(int client_fd_, string prefix)
@@ -171,10 +150,12 @@ void printConnectionStatus(int client_fd_, string prefix)
 
     if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
         && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
-        LOG(INFO) << prefix << ": (socket: " << client_fd_ << ")" << "[Server] " << inet_ntoa(serverAddr.sin_addr) << ":" << ntohs(serverAddr.sin_port) 
-              << " <---> [Client] " << inet_ntoa(peerAddr.sin_addr) << ":" << ntohs(peerAddr.sin_port) << endl;
+        INFO("%s: (socket %d) [Server] %s:%d <---> [Client] %s:%d",
+            prefix.c_str(), client_fd_,
+            inet_ntoa(serverAddr.sin_addr), ntohs(serverAddr.sin_port),
+            inet_ntoa(peerAddr.sin_addr), ntohs(peerAddr.sin_port));
     else
-        LOG(ERROR) << "printConnectionStatus failed ! " << strerror(errno) << endl;
+        ERROR("printConnectionStatus failed ! (%s)", strerror(errno));
 }
 
 string escapeStr(const string& str, size_t MAXBUF)

@@ -8,6 +8,7 @@
 
 #include "Epoll.h"
 #include "HttpHandler.h"
+#include "Log.h"
 #include "ThreadPool.h"
 #include "Utils.h"
 
@@ -44,14 +45,13 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd)
                 break;
             // 如果由于文件描述符不够用了,则会返回 EMFILE，此时清空全部的尚未 accept 连接
             else if(errno == EMFILE) {
-                LOG(ERROR) << "No reliable pipes ! " << endl;
+                WARN("No reliable pipes ! ");
                 closeRemainingConnect(listen_fd, idle_fd);
                 break;
             }
             // 如果是其他的错误，则输出信息
-            else {
-                LOG(ERROR) << "Accept Error! " << strerror(errno) << endl;
-            }
+            else 
+                ERROR("Accept Error! (%s)", strerror(errno));
         }
         // 如果 accept 正常
         else {
@@ -71,7 +71,7 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd)
                 // 直接关闭，告诉远程这里放不下了
                 close(client_fd);
 
-                LOG(ERROR) << "No reliable pipes ! " << endl;
+                WARN("No reliable pipes ! ");
                 closeRemainingConnect(listen_fd, idle_fd);
                 break;
             }
@@ -107,7 +107,7 @@ void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_ev
     // 如果存在错误,或者不是因为 read 事件而被唤醒
     if((events_ & EPOLLERR) || (events_ & EPOLLHUP) || (events_ & EPOLLRDHUP) || !(events_ & EPOLLIN))
     {
-        LOG(INFO) << "Socket(" << handler->getClientFd() << ") was closed by peer / error." << endl;
+        INFO("Socket(%d) was closed by peer / error.", handler->getClientFd());
         // 当某个 handler 无法使用时,一定要销毁内存
         delete handler;
         // 之后重新开始遍历新的事件.
@@ -117,10 +117,10 @@ void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_ev
     // 1. 如果是因为超时
     if(fd == handler->getTimer()->getFd())
     {
-        LOG(INFO) << "-------->>>>> New Message: "
-                  << "socket(" << handler->getClientFd() 
-                  << ") | timerfd(" << handler->getTimer()->getFd() 
-                  << ") timeout. " << endl;;
+        INFO("-------->>>>> "
+             "New Message: socket(%d) - timerfd(%d) timeout."
+             " <<<<<--------",
+             handler->getClientFd(), handler->getTimer()->getFd());
         /* 这里不像下面需要从epoll中关闭 timer fd
            因为 timer将会在HttpHandler的析构函数中从epoll内部删除 */
         // 删除 handler 实例
@@ -153,14 +153,14 @@ int main(int argc, char* argv[])
     // 获取传入的参数
     if (argc < 2 || !isNumericStr(argv[1])) 
     {
-        LOG(ERROR) << "usage: " << argv[0] << " <port> [<www_dir>]" << endl;
+        ERROR("usage: %s <port> [<www_dir>]", argv[0]);
         exit(EXIT_FAILURE);
     }
     int port = atoi(argv[1]);
     if(argc > 2)
         HttpHandler::setWWWPath(argv[2]);
     // 输出当前进程的 PID，便于调试
-    LOG(INFO) << "PID: " << getpid() << endl;
+    INFO("PID: %d", getpid());
     // 忽略 SIGPIPE 信号
     handleSigpipe();
     // 创建线程池
@@ -171,8 +171,7 @@ int main(int argc, char* argv[])
     int listen_fd = -1;
     if((listen_fd = socket_bind_and_listen(port)) == -1)
     {
-        LOG(ERROR) << "Bind " << port << " port failed ! " 
-                   << strerror(errno) << endl;
+        ERROR("Bind %d port failed ! (%s)", port, strerror(errno));
         exit(EXIT_FAILURE);
     }
 
@@ -198,11 +197,7 @@ int main(int argc, char* argv[])
                 continue;
             // 如果是其他异常,则输出信息并终止.
             else
-            {
-                LOG(ERROR) << "epoll_wait fail! " << strerror(errno) 
-                           << ". abort!" << endl;
-                abort();
-            }
+                FATAL("epoll_wait fail! (%s)", strerror(errno));
         }
         // 如果什么也没读到,则可能是因为 signal 导致的.例如 SIGINT XD
         else if(event_num == 0)

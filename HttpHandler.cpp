@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "HttpHandler.h"
+#include "Log.h"
 #include "Utils.h"
 
 // 声明一下该静态成员变量
@@ -51,7 +52,10 @@ HttpHandler::~HttpHandler()
     }
     assert(ret1 && ret2);
     // 关闭客户套接字
-    LOG(INFO) << "------------------------ Connection Closed (socket: " << client_fd_ << ")------------------------" << endl;
+    INFO("------------------------ "
+         "Connection Closed (socket: %d)"
+         "------------------------",
+         client_fd_);
     close(client_fd_);
 }
 
@@ -77,7 +81,9 @@ void HttpHandler::reset()
 
 HttpHandler::ERROR_TYPE HttpHandler::readRequest()
 {
-    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Request Packet ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
+    INFO("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+         "- Request Packet -"
+         ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> ");
 
     char buffer[MAXBUF];
     
@@ -98,11 +104,10 @@ HttpHandler::ERROR_TYPE HttpHandler::readRequest()
             // 如果读取到的字节数为0,则说明 EOF, 远程连接已经被关闭
             return ERR_CONNECTION_CLOSED;
         }
-        // LOG(INFO) << "Read data: " << buffer << endl;
 
         // 将读取到的数据组装起来
         string request(buffer, buffer + len);
-        LOG(INFO) << "{" << escapeStr(request, MAXBUF) << "}" << endl;
+        INFO("{%s}", escapeStr(request, MAXBUF).c_str());
 
         request_ += request;
     }
@@ -130,7 +135,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
         method_ = METHOD_HEAD;
     else
         return ERR_NOT_IMPLEMENTED;
-    LOG(INFO) << "Method: " << methodStr << endl;
+    INFO("Method: %s", methodStr.c_str());
 
     // b. 查找目标路径
     pos1++;
@@ -140,12 +145,12 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
     // 获取path时,注意加上 www path
     path_ = www_path + first_line.substr(pos1, pos2 - pos1);
     
-    LOG(INFO) << "Path: " << path_ << endl;
+    INFO("Path: %s", path_.c_str());
 
     // c. 查看HTTP版本
     pos2++;
     string http_version_str = first_line.substr(pos2, first_line.length() - pos2);
-    LOG(INFO) << "HTTP Version: " << http_version_str << endl;
+    INFO("HTTP Version: %s", http_version_str.c_str());
 
     // 检测是否支持客户端 http 版本
     if(http_version_str == "HTTP/1.0")
@@ -162,7 +167,9 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
 
 HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
 {
-    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Request Info ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
+    INFO("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+         "- Request Info -"
+         ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
 
     size_t pos1, pos2;
     for(pos1 = curr_parse_pos_;
@@ -188,7 +195,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
         // 获取 value
         string&& value = header.substr(pos1 + 1);
 
-        LOG(INFO) << "HTTP Header: [" << key << " : " << value << "]" << endl;
+        INFO("HTTP Header: [%s : %s]", key.c_str(), value.c_str());
 
         headers_[key] = value;
     }
@@ -216,7 +223,7 @@ HttpHandler::ERROR_TYPE HttpHandler::parseBody()
     http_body_ = request_.substr(curr_parse_pos_, len);
 
     // 输出剩余的 HTTP body
-    LOG(INFO) << "HTTP Body: {" << escapeStr(http_body_, MAXBUF) << "}" << endl;
+    INFO("HTTP Body: {%s}", escapeStr(http_body_, MAXBUF).c_str());
 
     return ERR_SUCCESS;    
 }
@@ -241,7 +248,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
     struct stat st;
     if(stat(path_.c_str(), &st) == -1)
     {
-        LOG(ERROR) << "Can not get file [" << path_ << "] state ! " << strerror(errno) << endl;
+        WARN("Can not get file [%s] state ! (%s)", path_.c_str(), strerror(errno));
         if(errno == ENOENT)
             return ERR_NOT_FOUND;
         else
@@ -256,7 +263,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         int file_fd;
         if((file_fd = open(path_.c_str(), O_RDONLY, 0)) == -1)
         {
-            LOG(ERROR) << "File [" << path_ << "] open failed ! " << strerror(errno) << endl;
+            WARN("File [%s] open failed ! (%s)", path_.c_str(), strerror(errno));
             if(errno == ENOENT)
                 // 如果打开失败,则返回404
                 return ERR_NOT_FOUND;
@@ -271,7 +278,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         // 异常处理
         if(addr == MAP_FAILED)
         {
-            LOG(ERROR) << "Can not map file [" << path_ << "] -> mem ! " << endl;
+            WARN("Can not map file [%s] -> mem! (%s)", path_.c_str(), strerror(errno));
             return ERR_INTERNAL_SERVER_ERR;
         }
         // 将数据从内存页存入至 responseBody
@@ -280,7 +287,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         // 记得删除内存
         int res = munmap(addr, st.st_size);
         if(res == -1)
-            LOG(ERROR) << "Can not unmap file [" << path_ << "] <-> mem ! " << endl;
+            WARN("Can not unmap file [%s] -> mem! (%s)", path_.c_str(), strerror(errno));
         // 获取 Content-type
         string suffix = path_;
         // 通过循环找到最后一个 dot
@@ -307,11 +314,11 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         int cgi_output[2];
         int cgi_input[2];
         if (pipe(cgi_output) == -1) {
-            LOG(ERROR) << "cgi_output create error. " << strerror(errno) << endl;
+            WARN("cgi_output create error. (%s)", strerror(errno));
             return ERR_INTERNAL_SERVER_ERR;
         }
         if (pipe(cgi_input) == -1) {
-            LOG(ERROR) << "cgi_output create error. " << strerror(errno) << endl;
+            WARN("cgi_input create error. (%s)", strerror(errno));
             // 记得关闭之前的管道
             close(cgi_output[0]);
             close(cgi_output[1]);
@@ -326,7 +333,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
          */ 
         if((pid = fork()) < 0)
         {
-            LOG(ERROR) << "Fork error. " << strerror(errno) << endl;
+            WARN("Fork error. (%s)", strerror(errno));
             close(cgi_input[0]);
             close(cgi_input[1]);
             close(cgi_output[0]);
@@ -400,7 +407,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
                 // 如果waitpid 出错
                 if(waitpid_ret < 0)
                 {
-                    LOG(ERROR) << "waitpid error. " << strerror(errno) << endl;
+                    WARN("waitpid error. (%s)", strerror(errno));
                     // ret 前,一定一定一定要关闭这个读取端口
                     close(cgi_output[0]);
                     return ERR_INTERNAL_SERVER_ERR;
@@ -432,7 +439,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
                     if(getpgid(pid) == pid)
                         res_kill_pgid = kill(-pid, SIGKILL);
                     assert(!res_kill_sub && !res_kill_pgid);
-                    LOG(ERROR) << "Sub process timeout." << endl;
+                    WARN("Sub process timeout.");
                 }
             }
 
@@ -442,7 +449,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             // 非阻塞读取
             if(!setFdNoBlock(cgi_output[0]))
             {
-                LOG(ERROR) << "set fd(" << cgi_output[0] << ") no block fail! " << strerror(errno) << endl;
+                WARN("set fd(%d) no block fail! (%s)", cgi_output[0], strerror(errno));
                 close(cgi_output[0]);
                 return ERR_INTERNAL_SERVER_ERR;
             }
@@ -473,54 +480,54 @@ bool HttpHandler::handleErrorType(HttpHandler::ERROR_TYPE err)
         /* 注意这里没有设置 STATE */
         break;
     case ERR_READ_REQUEST_FAIL:
-        LOG(ERROR) << "HTTP Read request failed ! " << strerror(errno) << endl;
+        ERROR("HTTP Read request failed ! (%s)", strerror(errno));
         state_ = STATE_FATAL_ERROR;
         break;
     case ERR_AGAIN:
         --againTimes_;
-        LOG(INFO) << "HTTP waiting for more messages... " << endl;
+        INFO("HTTP waiting for more messages...");
         /* 注意这里没有设置 STATE , 与 ERR_SUCESS一样 */
         if(againTimes_ <= 0)
         {
             state_ = STATE_FATAL_ERROR;
-            LOG(ERROR) << "Reach max read times" << endl;
+            WARN("Reach max read times");
         }
         break;
     case ERR_CONNECTION_CLOSED:
-        LOG(INFO) << "HTTP Socket(" << client_fd_ << ") was closed." << endl;
+        INFO("HTTP Socket(%d) was closed.", client_fd_);
         state_ = STATE_FATAL_ERROR;
         break;
     case ERR_SEND_RESPONSE_FAIL:
-        LOG(ERROR) << "Send Response failed !" << endl;
+        ERROR("Send Response failed !");
         state_ = STATE_FATAL_ERROR;
         break;
     case ERR_BAD_REQUEST:
-        LOG(ERROR) << "HTTP Bad Request." << endl;
+        WARN("HTTP Bad Request.");
         sendErrorResponse("400", "Bad Request");
         state_ = STATE_ERROR;
         break;
     case ERR_NOT_FOUND:
-        LOG(INFO) << "HTTP Not Found." << endl;
+        WARN("HTTP Not Found.");
         sendErrorResponse("404", "Not Found");
         state_ = STATE_ERROR;
         break;
     case ERR_LENGTH_REQUIRED:
-        LOG(INFO) << "HTTP Length Required." << endl;
+        WARN("HTTP Length Required.");
         sendErrorResponse("411", "Length Required");
         state_ = STATE_ERROR;
         break;
     case ERR_NOT_IMPLEMENTED:
-        LOG(INFO) << "HTTP Request method is not implemented." << endl;
+        WARN("HTTP Request method is not implemented.");
         sendErrorResponse("501", "Not Implemented");
         state_ = STATE_ERROR;
         break;
     case ERR_INTERNAL_SERVER_ERR:
-        LOG(INFO) << "HTTP Internal Server Error." << endl;
+        WARN("HTTP Internal Server Error.");
         sendErrorResponse("500", "Internal Server Error");
         state_ = STATE_ERROR;
         break;
     case ERR_HTTP_VERSION_NOT_SUPPORTED:
-        LOG(INFO) << "HTTP Request HTTP Version Not Supported." << endl;
+        WARN("HTTP Request HTTP Version Not Supported.");
         sendErrorResponse("505", "HTTP Version Not Supported");
         state_ = STATE_ERROR;
         break;
@@ -552,8 +559,8 @@ HttpHandler::ERROR_TYPE HttpHandler::sendResponse(const string& responseCode, co
     ssize_t len = writen(client_fd_, (void*)response.c_str(), response.size());
 
     // 输出返回的数据
-    LOG(INFO) << "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Response Packet ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> " << endl;
-    LOG(INFO) << "{" << escapeStr(response, MAXBUF) << "}" << endl;
+    INFO("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<- Response Packet ->>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> ");
+    INFO("{%s}", escapeStr(response, MAXBUF).c_str());
 
     if(len < 0 || static_cast<size_t>(len) != response.size())
         return ERR_SEND_RESPONSE_FAIL;

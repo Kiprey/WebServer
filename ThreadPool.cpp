@@ -1,3 +1,4 @@
+#include "Log.h"
 #include "ThreadPool.h"
 #include "Utils.h"
 
