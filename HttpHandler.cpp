@@ -341,6 +341,10 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             return ERR_INTERNAL_SERVER_ERR;
         }
         // 对于子进程来说
+        /**
+         * TODO: Sub Process timeout
+         * 在 **多线程环境** 下，子进程有概率在 execve 后无法从 fd0 中读取任何数据，阻塞在读取操作
+         */
         if(pid == 0)
         {
             /**
@@ -362,9 +366,11 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             if(prctl(PR_SET_PDEATHSIG, SIGKILL) == -1)
                 FATAL("prctl fail in child process! (%s)", strerror(errno));
             // 首先重新设置标准输入输出流
-            // 注意 dup2 会自动关闭当前打开的 fd0 和 fd1
-            if(dup2(cgi_input[0], 0) == -1 || dup2(cgi_output[1], 1) == -1)
-                exit(EXIT_FAILURE);
+            // 注意 dup2 会自动关闭当前打开的 fd0、fd1 和 fd2
+            if(dup2(cgi_input[0], 0) == -1 
+                || dup2(cgi_output[1], 1) == -1 
+                || dup2(1, 2) == -1)
+                FATAL("dup2 fail! (%s)", strerror(errno));
             close(cgi_input[0]);
             close(cgi_input[1]);
             close(cgi_output[0]);
@@ -375,13 +381,7 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             strcpy(path, path_.c_str());
             char* const args[] = { path, NULL };
 
-            /**
-             * 此时已经完成了所有的准备，现在准备执行目标程序
-             * 但在执行目标程序之前，需要先通知父进程，以说明当前程序的 stdin 和 stdout 已经准备就绪，可以输入数据
-             * 从已经替换为管道的 stdin(pipe) 写入数据
-             * NOTE: 这一步通知父进程的操作相当重要，因为可以避免条件竞争
-             */
-            write(1, "HELO", 4);
+            // 此时已经完成了所有的准备，现在准备执行目标程序
 
             // 执行
             execve(path, args, environ);
@@ -393,16 +393,6 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         {
             close(cgi_input[0]);
             close(cgi_output[1]);
-
-            // 等待子进程发送的握手信号
-            char helo_buf[4];
-            if(read(cgi_output[0], helo_buf, 4) != 4) {
-                // 子进程出现了未知错误，导致握手失败，需要立即终止剩余操作
-                close(cgi_input[1]);
-                close(cgi_output[0]);
-                ERROR("Child process handshake fail! (%s)", strerror(errno));
-                return ERR_INTERNAL_SERVER_ERR;
-            }
 
             // 将 HTTP body 写入 CGI 程序的标准输入中
             ssize_t len = writen(cgi_input[1], http_body_.c_str(), http_body_.length(), true);
@@ -644,10 +634,10 @@ bool HttpHandler::RunEventLoop()
         return false;
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
-    bool ret1 = epoll_->modify(client_fd_, getClientEpollEvent(), getClientTriggerCond());
-    bool ret2 = true;
+    bool ret1 = true;
     if(timer_)
-        ret2 = epoll_->modify(timer_->getFd(), getTimerEpollEvent(), getTimerTriggerCond());
+        ret1 = epoll_->modify(timer_->getFd(), getTimerEpollEvent(), getTimerTriggerCond());
+    bool ret2 = epoll_->modify(client_fd_, getClientEpollEvent(), getClientTriggerCond());
     assert(ret1 && ret2);
 
     return true;
