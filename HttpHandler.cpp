@@ -313,11 +313,23 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         // 创建两个管道
         int cgi_output[2];
         int cgi_input[2];
-        if (pipe(cgi_output) == -1) {
+        /**
+         * NOTE: 创建管道时，一定要指定 O_CLOEXEC
+         * 因为当当前线程 thread1 执行 fork 产生子进程 subproc1 后，
+         * subproc1 会同步继承这些其他线程 thread2 用于其他进程 subproc2 通信的管道
+         * 这样当 thread2 关闭了向 subproc2 写入数据的管道 pipe2w 后，
+         * 由于 subproc1 保存了 pipe2w，因此实际上该管道不会被销毁
+         * 所以 subproc2 将无法从 pipe2w 中读取数据，因为管道没有关闭，不存在EOF
+         * 
+         * NOTE: 即便创建管道时指定了 O_CLOEXEC
+         * 但实际上，在子进程中执行 dup2 操作时，新复制出的文件描述符将不会继承 O_CLOEXEC，
+         * 这样我们就可以达到：关闭所有的进程间通信管道，只保留当前子进程的输入输出管道，这样的一个目的
+         */ 
+        if (pipe2(cgi_output, O_CLOEXEC) == -1) {
             WARN("cgi_output create error. (%s)", strerror(errno));
             return ERR_INTERNAL_SERVER_ERR;
         }
-        if (pipe(cgi_input) == -1) {
+        if (pipe2(cgi_input, O_CLOEXEC) == -1) {
             WARN("cgi_input create error. (%s)", strerror(errno));
             // 记得关闭之前的管道
             close(cgi_output[0]);
@@ -341,10 +353,6 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
             return ERR_INTERNAL_SERVER_ERR;
         }
         // 对于子进程来说
-        /**
-         * TODO: Sub Process timeout
-         * 在 **多线程环境** 下，子进程有概率在 execve 后无法从 fd0 中读取任何数据，阻塞在读取操作
-         */
         if(pid == 0)
         {
             /**
