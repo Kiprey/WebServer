@@ -257,6 +257,18 @@ HttpHandler::ERROR_TYPE HttpHandler::handleRequest()
         else
             return ERR_INTERNAL_SERVER_ERR;
     }
+    // 如果试图打开一个文件夹,则添加 index.html
+    if (S_ISDIR(st.st_mode)) {
+        path_ += "/index.html";
+        if(stat(path_.c_str(), &st) == -1)
+        {
+            WARN("Can not get file [%s] state ! (%s)", path_.c_str(), strerror(errno));
+            if(errno == ENOENT)
+                return ERR_NOT_FOUND;
+            else
+                return ERR_INTERNAL_SERVER_ERR;
+        }
+    }
 
     // 开始处理请求
     // 对于普通的 GET / HEAD 请求,读取文件并发送
