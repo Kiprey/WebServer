@@ -143,7 +143,10 @@ HttpHandler::ERROR_TYPE HttpHandler::parseURI()
     if(pos2 == string::npos)    return ERR_BAD_REQUEST;
 
     // 获取path时,注意加上 www path
-    path_ = www_path + first_line.substr(pos1, pos2 - pos1);
+    path_ = www_path + "/" + first_line.substr(pos1, pos2 - pos1);
+    // 检测目录穿越
+    if(!is_path_parent(www_path, path_))
+        return ERR_NOT_FOUND;
     
     INFO("Path: %s", path_.c_str());
 

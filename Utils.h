@@ -98,4 +98,12 @@ bool isNumericStr(string str);
  */ 
 size_t closeRemainingConnect(int listen_fd, int* idle_fd);
 
+/**
+ * @brief 检测两个 path 是否包含从属关系，以防止目录穿越漏洞
+ * @param root_dir 最外层的路径
+ * @param child_dir 内层路径
+ * @return 返回从属关系
+ */ 
+bool is_path_parent(const string& parent_path, const string& child_path);
+
 #endif

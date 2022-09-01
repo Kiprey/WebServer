@@ -215,3 +215,51 @@ size_t closeRemainingConnect(int listen_fd, int* idle_fd) {
     *idle_fd = open("/dev/null", O_RDONLY | O_CLOEXEC); 
     return count;
 }
+
+bool is_path_parent(const string& parent_path, const string& child_path) {
+    bool result = false;
+    char* parent_p = nullptr, *child_p = nullptr;
+    char separator;
+
+    parent_p = canonicalize_file_name(parent_path.c_str());
+    if(!parent_p) {
+        ERROR("is_path_parent failed, cannot get parent path [%s] (%s)", 
+              parent_path.c_str(), 
+              strerror(errno));
+        goto clean_parent;
+    }
+
+    child_p = canonicalize_file_name(child_path.c_str());
+    if(!child_p) {
+        ERROR("is_path_parent failed, cannot get child path [%s] (%s)", 
+            child_path.c_str(), 
+            strerror(errno));
+        goto clean_child;
+    }
+
+    // INFO("resolved parent path: %s", parent_p);
+    INFO("resolved path: %s", child_p);
+
+    /* 判断是否存在目录穿越漏洞，判断条件：
+        1. parent_path 是否在 child_path 的起始位置，
+            例如 parent: /usr/class/html
+            与   child:  /usr/class/html/index.html
+        2. 判断 parent_path 末尾是否分割符
+            例如 parent: /usr/class/html
+            与   child:  /usr/class/htmlflag/../../../../flag
+            ----------------------------A--------------------
+                      这里没有在 html 后面加 /，说明两个路径不对应
+    */
+    if(child_p == strstr(child_p, parent_p)) {
+        // parent 在 child 中，因此 child[parent.len] 不会越界
+        separator = child_p[strlen(parent_p)];
+        if (separator == '\0' || separator == '/')
+            return true;
+    }
+
+    free(child_p);
+clean_child:
+    free(parent_p);
+clean_parent:
+    return result;
+}
