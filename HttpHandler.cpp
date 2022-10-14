@@ -189,10 +189,14 @@ HttpHandler::ERROR_TYPE HttpHandler::parseHttpHeader()
         pos1 = header.find(' ');
 
         if(pos1 == string::npos)    return ERR_BAD_REQUEST;
-        if(header[pos1 - 1] != ':') return ERR_BAD_REQUEST;
 
-        // key处减去1是为了消除key里的最后一个冒号字符
-        string&& key = header.substr(0, pos1 - 1);
+        // key 的格式： `XXX:`
+        string&& key = header.substr(0, pos1);
+
+        // 消除key里的最后一个冒号字符
+        if(key.size() < 2 || key.back() != ':') return ERR_BAD_REQUEST;
+        key.pop_back();
+
         // key 转小写
         transform(key.begin(), key.end(), key.begin(), ::tolower);
         // 获取 value
