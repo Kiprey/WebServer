@@ -150,7 +150,7 @@ void printConnectionStatus(int client_fd_, string prefix)
 
     if((getsockname(client_fd_, (struct sockaddr *)&serverAddr, &serverAddrLen) != -1)
         && (getpeername(client_fd_, (struct sockaddr *)&peerAddr, &peerAddrLen) != -1))
-        INFO("%s: (socket %d) [Server] %s:%d <---> [Client] %s:%d",
+        DEBUG_INFO("%s: (socket %d) [Server] %s:%d <---> [Client] %s:%d",
             prefix.c_str(), client_fd_,
             inet_ntoa(serverAddr.sin_addr), ntohs(serverAddr.sin_port),
             inet_ntoa(peerAddr.sin_addr), ntohs(peerAddr.sin_port));
@@ -238,7 +238,7 @@ bool is_path_parent(const string& parent_path, const string& child_path) {
     }
 
     // INFO("resolved parent path: %s", parent_p);
-    INFO("resolved path: %s", child_p);
+    DEBUG_INFO("resolved path: %s", child_p);
 
     /* 判断是否存在目录穿越漏洞，判断条件：
         1. parent_path 是否在 child_path 的起始位置，

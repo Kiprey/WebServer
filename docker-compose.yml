@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:17
+    cpus: 2
+    mem_limit: 16g
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydatabase
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  web:
+    build: .
+    container_name: webserver
+    cpus: 2
+    mem_limit: 4g
+    depends_on:
+      - db
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydatabase
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      # DATABASE_INFO: "dbname=mydatabase user=myuser password=mypassword hostaddr=<db-ip> port=5432"
+      THREAD_POOL_SIZE: "2"

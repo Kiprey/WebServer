@@ -4,9 +4,16 @@ OBJS    := $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCE)))
 
 TARGET  := WebServer
 CC      := g++
-LIBS    := -lpthread
-CFLAGS  := -std=c++11 -g3 -ggdb3 -Wall -O0 -fsanitize=address $(INCLUDE)
+LIBS    := -lpthread -lpq
+CFLAGS  := -std=c++11 -O2 $(INCLUDE) -I/usr/include/postgresql
 CXXFLAGS:= $(CFLAGS)
+ifeq ($(DEBUG), 1)
+    CFLAGS  := $(CFLAGS) -g3 -ggdb3 -O0 
+    CXXFLAGS:= $(CFLAGS)
+else
+    CFLAGS := $(CFLAGS) -DNDEBUG
+    CXXFLAGS := $(CFLAGS)
+endif
 
 .PHONY : objs clean veryclean rebuild all
 all : $(TARGET)
@@ -14,7 +21,6 @@ objs : $(OBJS)
 rebuild: veryclean all
 clean :
 	rm -rf *.o
-veryclean : clean
 	rm -rf $(TARGET)
 
 $(TARGET) : $(OBJS)
