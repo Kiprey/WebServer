@@ -1,32 +1,45 @@
+# version: '3.8'
 services:
-  db:
-    image: postgres:17
-    cpus: 2
-    mem_limit: 16g
-    container_name: postgres_db
+  postgres:
+    image: postgres:15
+    container_name: postgres_container
     environment:
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
-      POSTGRES_DB: mydatabase
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init_db:/docker-entrypoint-initdb.d
     ports:
-      - "127.0.0.1:5432:5432"
-
-  web:
-    build: .
-    container_name: webserver
-    cpus: 2
-    mem_limit: 4g
-    depends_on:
-      - db
-    ports:
-      - "127.0.0.1:8080:80"
+      - "5432:5432"
+    networks:
+      app-network:
+        ipv4_address: 172.20.0.2
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  cpp_app:
+    build:
+      context: ./student_code
+      dockerfile: Dockerfile-1
+    container_name: cpp_app_container
+    volumes:
+      - ./student_code:/usr/src/student_code
     environment:
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
-      POSTGRES_DB: mydatabase
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      # DATABASE_INFO: "dbname=mydatabase user=myuser password=mypassword hostaddr=<db-ip> port=5432"
-      THREAD_POOL_SIZE: "2"
+      DATABASE_HOST: localhost
+    extra_hosts:
+      - "localhost:172.20.0.2"
+    ports:
+      - "8888:8888"
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

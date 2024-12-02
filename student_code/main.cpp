@@ -277,8 +277,12 @@ HTTP_ERROR_TYPE POST_api_bind(HttpHandler* handler)
     PGresult* res = PQexecParams(pg_conn, query, 1, nullptr, paramValues, nullptr, nullptr, 0);
 
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        // 获取错误信息
+        char err_msg[0x100];
+        snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
+        PQclear(res);
         PQfinish(pg_conn);
-        return ERR_INTERNAL_SERVER_ERR;
+        return handler->sendErrorResponse("500", err_msg);
     }
 
     // 获取返回的 userid
@@ -342,9 +346,12 @@ HTTP_ERROR_TYPE POST_api_upload(HttpHandler* handler)
 
     // 检查查询是否成功
     if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        // 获取错误信息
+        char err_msg[0x100];
+        snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
         PQclear(res);
         PQfinish(pg_conn);
-        return ERR_INTERNAL_SERVER_ERR;
+        return handler->sendErrorResponse("500", err_msg);
     }
 
     PQclear(res);

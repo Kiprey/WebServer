@@ -1,6 +1,9 @@
 WebServer
+server
 *.o
 .vscode/
 .gdb_history
 ignore_*
 core
+build/
+bin/
