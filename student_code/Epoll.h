@@ -1,19 +1,16 @@
 #ifndef EPOLL_H
 #define EPOLL_H
 #include <sys/epoll.h>
+#include <functional>
+#include <memory>
+#include <optional>
 
 #include "Utils.h"
 
-using namespace std;
-
 /**
- * @brief 供epoll使用的结构体
- */ 
-struct EpollEvent
-{
-    int fd;     // 被唤醒的 fd
-    void* ptr;  // 顺便携带的数据
-};
+ * @brief 供epoll使用的回调函数，只会在主线程上执行，因此线程安全
+ */
+using EpollEventCallback = std::function<void(epoll_event)>;
 
 class Epoll
 {

@@ -4,18 +4,17 @@ WORKDIR /usr/src/student_code
 ENV BUILD_DIR=build
 
 # first. set postgres information env
-# ENV POSTGRES_USER=postgres
-# ENV POSTGRES_PASSWORD=postgres
-# ENV POSTGRES_DB=postgres
-# ENV POSTGRES_HOST=localhost
-# ENV POSTGRES_PORT=5432
-ENV DATABASE_INFO="dbname=postgres user=postgres password=postgres hostaddr=172.20.0.2 port=5432"
+ENV SERVER_POSTGRES_USER=postgres
+ENV SERVER_POSTGRES_PASSWORD=postgres
+ENV SERVER_POSTGRES_DB=postgres
+ENV SERVER_POSTGRES_HOST=localhost
+ENV SERVER_POSTGRES_PORT=5432
 
 # second, set max thread pool size
-ENV THREAD_POOL_SIZE=2
+ENV THREAD_POOL_SIZE=4
 
 # third, install dependencies
-RUN apt-get install -y libpq-dev rapidjson-dev
+RUN apt-get install -y libpqxx-dev rapidjson-dev
 
 # last, build and start server!
 # CMD ["sh", "-c", "while true; do sleep 1000; done"]

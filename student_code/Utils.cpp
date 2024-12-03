@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <cctype>
 #include <cstring>
+#include <vector>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -8,6 +9,8 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #include "Log.h"
 #include "MutexLock.h"
@@ -262,4 +265,35 @@ clean_child:
     free(parent_p);
 clean_parent:
     return result;
+}
+
+std::vector<std::string> resolve_hostname_to_ipv4(const std::string& hostname) {
+    struct addrinfo hints, *res, *p;
+    std::vector<std::string> ip_addresses;
+    char ipstr[INET_ADDRSTRLEN];
+
+    memset(&hints, 0, sizeof(hints));
+    // IPv4
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int status = getaddrinfo(hostname.c_str(), nullptr, &hints, &res);
+    if (status != 0) {
+        ERROR("getaddrinfo failed: %s", gai_strerror(status));
+        return ip_addresses;
+    }
+
+    for (p = res; p != nullptr; p = p->ai_next) {
+        // 只获取 IPv4 地址
+        if (p->ai_family == AF_INET) {
+            struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+            void *addr = &(ipv4->sin_addr);
+
+            inet_ntop(p->ai_family, addr, ipstr, sizeof(ipstr));
+            ip_addresses.push_back(ipstr);
+        }
+    }
+
+    freeaddrinfo(res);
+    return ip_addresses;
 }

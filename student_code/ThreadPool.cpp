@@ -53,22 +53,19 @@ ThreadPool::~ThreadPool()
     }
 }
 
-bool ThreadPool::appendTask(void (*function)(void*), void* arguments)
+bool ThreadPool::appendTask(std::function<void(void*)> function, void* arguments, int priority)
 {
     // 由于会操作事件队列,因此需要上锁
     MutexLockGuard guard(threadpool_mutex_);
     // 如果队列长度过长,则将当前task丢弃
     if(task_queue_.size() > maxQueueSize_)
         return false;
-    else
-    {
-        // 添加task至列表中
-        ThreadpoolTask task = { function, arguments };
-        task_queue_.push(task);
-        // 每当有新事件进入之时,只唤醒一个等待线程
-        threadpool_cond_.notify();
-        return true;
-    }
+    // 添加task至列表中
+    ThreadpoolTask task = { function, arguments, priority };
+    task_queue_.push(task);
+    // 每当有新事件进入之时,只唤醒一个等待线程
+    threadpool_cond_.notify();
+    return true;
 }
 
 void* ThreadPool::TaskForWorkerThreads_(void* arg)
@@ -95,7 +92,7 @@ void* ThreadPool::TaskForWorkerThreads_(void* arg)
                 pool->threadpool_cond_.wait();
             // 唤醒后一定有事件
             assert(pool->task_queue_.size() != 0);
-            task = pool->task_queue_.front();
+            task = pool->task_queue_.top();
             pool->task_queue_.pop();
         }
         // 执行事件

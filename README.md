@@ -11,10 +11,12 @@ docker-compose up
 
 ### 方法二：手动构建运行
 
+> 注：在 `init_db/user_info.sql` 中为【非主键的 deviceid 字段】设置了 UNIQUE 以加速数据库查询。
+
 - 使用以下指令编译:
 
   ```bash
-  sudo apt-get install libpq-dev rapidjson-dev
+  sudo apt-get install libpqxx-dev rapidjson-dev
   mkdir build && cd build
   cmake .. && make
   cd ../bin
@@ -23,8 +25,8 @@ docker-compose up
 - 使用以下指令运行
 
   ```bash
-  export DATABASE_INFO="dbname=mydatabase user=myuser password=mypassword hostaddr=172.18.0.2 port=5432"
-  export THREAD_POOL_SIZE="2"
+  export SERVER_POSTGRES_USER=postgres SERVER_POSTGRES_PASSWORD=postgres SERVER_POSTGRES_DB=postgres SERVER_POSTGRES_HOST=localhost SERVER_POSTGRES_PORT=5432
+  export THREAD_POOL_SIZE=4
   ./server <port> [<www_dir>]
   ```
 
@@ -111,6 +113,8 @@ docker-compose up
 - 使用 apache 测试工具 `ab` 来进行大批量测试
 
   ```bash
+  sudo apt-get install apache2-utils
+
   # -c 并发数
   # -n 总请求数
   # -s 单个请求的超时时间
@@ -126,3 +130,8 @@ docker-compose up
   echo '{"userid": 1, "data": "exp:100;gold:100"}' > /tmp/data2.json
   ab -c 64 -n 1000 -p /tmp/data2.json -T "application/json" http://localhost:8888/api/upload
   ```
+
+## TODO
+
+- 由于 main.cpp 里的交叉引用和生命周期问题，导致程序 bug 重重
+- 未能完成 database 异步获取的效果。

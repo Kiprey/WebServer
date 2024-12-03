@@ -5,5 +5,5 @@ server
 .gdb_history
 ignore_*
 core
-build/
+build*/
 bin/

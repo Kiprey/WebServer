@@ -3,11 +3,10 @@
 
 #include <cassert>
 #include <queue>
+#include <functional>
 
 #include "Condition.h"
 #include "MutexLock.h"
-
-using namespace std;
 
 class ThreadPool
 {
@@ -32,12 +31,14 @@ public:
 
     /***
      * @brief   将当前task加入至线程池中
-     * @param   task 待处理的 task
+     * @param   function 待处理的 task
+     * @param   arguments function 的参数
+     * @param   priority 用于指定任务的优先级，数越小优先级越高
      * @return  返回添加结果, true 表示添加成功, false 表示队列已满, 添加失败
      * @note    这里的 arguments 指针指向的对象,将 **不会** 在子线程内部事件执行完成后自动释放
      *          也就是说,外部调用者需要自己考虑到内存释放
      */ 
-    bool appendTask(void (*function)(void*), void* arguments);
+    bool appendTask(std::function<void(void*)> function, void* arguments, int priority);
 
     // /**
     //  * @brief 声明一些获取线程池属性的方法.不管有没有用到,实现一下接口总是没错的.
@@ -59,8 +60,15 @@ private:
      */
     struct ThreadpoolTask
     {
-        void (*function)(void*);
+        std::function<void(void*)> function;
         void* arguments;
+        int priority;  // 任务优先级，值越大优先级越高
+
+        // 定义优先级比较规则，按优先级降序排列
+        bool operator<(const ThreadpoolTask& other) const
+        {
+            return priority < other.priority;  // 小的优先级排在后面
+        }
     };
 
     size_t threadNum_;                          // 线程个数
@@ -70,9 +78,9 @@ private:
     // size_t startedThreadNum_;                   // 已经启动的线程个数,注意已经启动的线程分为 正在工作 和 空闲 两类
 
     size_t maxQueueSize_;                       // 事件队列最大长度,超出则停止添加新事件
-    queue<ThreadpoolTask> task_queue_;          // 事件队列
+    std::priority_queue<ThreadpoolTask> task_queue_;          // 事件队列
 
-    vector<pthread_t> threads_;                 // 线程的标识符
+    std::vector<pthread_t> threads_;                 // 线程的标识符
 
     MutexLock threadpool_mutex_;                // 线程池的锁,保证每次最多只能有一个线程正在操作该线程池
     Condition threadpool_cond_;                 // 线程池的条件变量,对于来新task时,唤醒空闲线程

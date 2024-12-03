@@ -6,25 +6,60 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <rapidjson/document.h>
-#include <libpq-fe.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 
 #include "Epoll.h"
 #include "HttpHandler.h"
 #include "Log.h"
 #include "ThreadPool.h"
 #include "Utils.h"
+#include "Database.h"
 
-using namespace std;
-using namespace rapidjson;
+enum TASK_PRIORITY {
+    PARSE_HTTP_REQUEST = 0, // lowest priority
+    QUERY_DATABASE = 1,     // middle priority
+    FLUSH_DATABASE = 2,     // highest priority
+};
+
+
+/**
+ * @brief 处理旧的连接
+ * @param event         待处理的事件
+ * @param fd            被唤醒的文件描述符
+ */
+bool handle_potential_epoll_error(epoll_event event, int fd)
+{
+    // 处理一些错误事件
+    int events_ = event.events;
+    // 如果远程关闭了当前连接
+    if ((events_ & EPOLLHUP) || (events_ & EPOLLRDHUP)) {
+        DEBUG_INFO("Socket(%d) was closed by peer.", fd);
+        // 当某个 handler 无法使用时,一定要销毁内存
+        return false;
+    }
+    // 如果当前 socket / events_ 存在错误
+    else if ((events_ & EPOLLERR) || !(events_ & EPOLLIN)) {
+        ERROR("Socket(%d) error.", fd);
+        // 当某个 handler 无法使用时,一定要销毁内存
+        // 之后重新开始遍历新的事件.
+        return false;
+    }
+    // 如果没有错误发生
+    return true;
+}
 
 /**
  * @brief 处理新的连接
  * @param epoll     存放新连接的Epoll类实例 
  * @param listen_fd 新连接所对应的 listen 描述符
  */ 
-void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd, Router& router)
+void handleNewConnections(
+    std::shared_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> http_handlers, 
+    std::shared_ptr<Epoll> epoll, 
+    std::shared_ptr<ThreadPool> thread_pool, 
+    int listen_fd, 
+    int* idle_fd, 
+    std::shared_ptr<Router> router
+)
 {
     // 注意:可能会有很多个 connect 动作,但只会有一个 event
     sockaddr_in client_addr;
@@ -64,15 +99,13 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd, Router& rou
              *  注意这里使用了 ONESHOT, 每个套接字只会在 边缘触发,可读时处于就绪状态
              *  且每个套接字只会被一个线程处理
              *  NOTE: 每个 client_fd 只会在 HttpHandler 中被 close + 下面的 timer 异常处理中被关闭
-             *        每个 client_handler 也只会在 setConnectionClosed 之后, 执行完 RunEventLoop 函数结束时被释放
              *        每个 Timer 在此处创建, 在 HttpHandler 中被释放
-             *        可以看出,现在指针已经满天飞了 2333
              */
-            Timer* timer = new Timer(TFD_NONBLOCK | TFD_CLOEXEC);
+            std::unique_ptr<Timer> timer = std::make_unique<Timer>(TFD_NONBLOCK | TFD_CLOEXEC);
             // 如果timer创建失败,则清空当前所有尚未 accept 的连接，因为文件描述符满
             if(!timer->isValid())
             {
-                delete timer;
+                timer.reset();
                 // 直接关闭，告诉远程这里放不下了
                 close(client_fd);
                 
@@ -80,284 +113,236 @@ void handleNewConnections(Epoll* epoll, int listen_fd, int* idle_fd, Router& rou
                 WARN("No reliable pipes in new connection, close %d conns", closed_conn_num);
                 break;
             }
-            HttpHandler* client_handler = new HttpHandler(epoll, client_fd, timer, router);
+            std::shared_ptr<HttpHandler> client_handler = std::make_shared<HttpHandler>(epoll, client_fd, std::move(timer), router);
+            // 准备两个 fd 的 EpollEvent
+            std::weak_ptr<HttpHandler> weak_handler = client_handler;
+            std::weak_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> weak_http_handlers = http_handlers;
+            EpollEventCallback timerfd_callback = [weak_handler, weak_http_handlers](epoll_event event) mutable {
+                std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
+                assert (shared_handler);
+                if (handle_potential_epoll_error(event, shared_handler->getTimerFd())) {
+                    DEBUG_INFO("-------->>>>> "
+                        "New Message: socket(%d) - timerfd(%d) timeout."
+                        " <<<<<--------",
+                        shared_handler->getClientFd(), shared_handler->getTimerFd());
+                }
+                // 无论如何，都会删除 handler 实例
+                weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+            };
+
+            EpollEventCallback client_callback = [epoll, weak_handler, weak_http_handlers, thread_pool](epoll_event event) mutable {
+                std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
+                assert (shared_handler);
+                if (!handle_potential_epoll_error(event, shared_handler->getTimerFd())) {
+                    weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+                    return;
+                }
+                // 则从epoll中关闭 timer, 防止条件竞争
+                epoll->modify(shared_handler->getTimerFd(), nullptr, 0);
+                // 并将其放入线程池中并行执行
+                thread_pool->appendTask(
+                    // lambda 函数
+                    [shared_handler, weak_http_handlers](void* arg) mutable
+                    {
+                        printConnectionStatus(shared_handler->getClientFd(), "-------->>>>> New Message");
+
+                        // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
+                        if (!shared_handler->RunEventLoopAndReEpoll()) {
+                            weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+                        }
+                    }, 
+                    nullptr,
+                    TASK_PRIORITY::PARSE_HTTP_REQUEST);
+            };
+            client_handler->setClientEpollEventCallback(std::make_unique<EpollEventCallback>(std::move(client_callback)));
+            client_handler->setTimerEpollEventCallback(std::make_unique<EpollEventCallback>(std::move(timerfd_callback)));
+
             /**
              * @brief EPOLLRDHUP EPOLLHUP 不同点,前者是半关闭连接时出发,后者是完全关闭后触发
              * @ref tcp 源码 https://elixir.bootlin.com/linux/v4.19/source/net/ipv4/tcp.c#L524
              * @ref TCP: When is EPOLLHUP generated? https://stackoverflow.com/questions/52976152/tcp-when-is-epollhup-generated
              */ 
-            bool ret1 = epoll->add(client_fd, client_handler->getClientEpollEvent(), client_handler->getClientTriggerCond());
+            bool ret1 = epoll->add(client_fd, client_handler->getClientEpollEventCallback(), client_handler->getClientTriggerCond());
             // 设置定时器以边缘-单次触发方式
-            bool ret2 = epoll->add(timer->getFd(), client_handler->getTimerEpollEvent(), client_handler->getTimerTriggerCond());
+            bool ret2 = epoll->add(client_handler->getTimerFd(), client_handler->getTimerEpollEventCallback(), client_handler->getTimerTriggerCond());
             assert(ret1 && ret2);
             // 输出相关信息
             printConnectionStatus(client_fd, "-------->>>>> New Connection");
+            (*http_handlers)[client_handler->getClientFd()] = std::move(client_handler);
         }
     }
 }
 
-/**
- * @brief 处理旧的连接
- * @param epoll         被唤醒的 epoll
- * @param fd            被唤醒的文件描述符
- * @param thread_pool   目标线程池
- * @param event         待处理的事件
- */
-void handleOldConnection(Epoll* epoll, int fd, ThreadPool* thread_pool, epoll_event* event)
-{
-    EpollEvent* curr_epoll_event = static_cast<EpollEvent*>(event->data.ptr);
-    HttpHandler* handler = static_cast<HttpHandler*>(curr_epoll_event->ptr);
-    // 处理一些错误事件
-    int events_ = event->events;
-    // 如果远程关闭了当前连接
-    if ((events_ & EPOLLHUP) || (events_ & EPOLLRDHUP)) {
-        DEBUG_INFO("Socket(%d) was closed by peer.", handler->getClientFd());
-        // 当某个 handler 无法使用时,一定要销毁内存
-        delete handler;
-        // 之后重新开始遍历新的事件.
-        return;
-    }
-    // 如果当前 socket / events_ 存在错误
-    else if ((events_ & EPOLLERR) || !(events_ & EPOLLIN)) {
-        ERROR("Socket(%d) error.", handler->getClientFd());
-        // 当某个 handler 无法使用时,一定要销毁内存
-        delete handler;
-        // 之后重新开始遍历新的事件.
-        return;
-    }
-    // 如果没有错误发生
-    // 1. 如果是因为超时
-    if(fd == handler->getTimer()->getFd())
-    {
-        DEBUG_INFO("-------->>>>> "
-             "New Message: socket(%d) - timerfd(%d) timeout."
-             " <<<<<--------",
-             handler->getClientFd(), handler->getTimer()->getFd());
-        /* 这里不像下面需要从epoll中关闭 timer fd
-           因为 timer将会在HttpHandler的析构函数中从epoll内部删除 */
-        // 删除 handler 实例
-        delete handler;
-    }
-    // 2. 如果不是因为超时
-    else 
-    {
-        // 则从epoll中关闭 timer, 防止条件竞争
-        epoll->modify(handler->getTimer()->getFd(), nullptr, 0);
-        // 并将其放入线程池中并行执行
-        thread_pool->appendTask(
-            // lambda 函数
-            [](void* arg)
-            {
-                HttpHandler* handler = static_cast<HttpHandler*>(arg);
+// PGconn* connect_database() {
+//     // "dbname=test user=postgres password=secret hostaddr=127.0.0.1 port=5432"
+//     const char* conninfo = getenv("DATABASE_INFO");
+//     if (!conninfo) {
+//         DEBUG_INFO("DATABASE_INFO not set, falling back to POSTGRES_*");
 
-                printConnectionStatus(handler->getClientFd(), "-------->>>>> New Message");
+//         const char* user = getenv("POSTGRES_USER");
+//         const char* password = getenv("POSTGRES_PASSWORD");
+//         const char* dbname = getenv("POSTGRES_DB");
+//         const char* host = getenv("POSTGRES_HOST");
+//         const char* port = getenv("POSTGRES_PORT");
 
-                // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
-                if(!(handler->RunEventLoop()))
-                    delete handler;
-            }, 
-            handler);
-    }
-}
+//         if (!user || !password || !dbname || !host || !port)
+//             return nullptr;
 
-std::string resolve_hostname_to_ip(const std::string& hostname) {
-    struct addrinfo hints, *res;
-    char ipstr[INET6_ADDRSTRLEN];
+//         // 针对 PQconnectdb 无法自动处理主机名的缓解措施
+//         std::string resolved_ip = resolve_hostname_to_ip(host);
+//         if (resolved_ip.empty()) {
+//             ERROR("Failed to resolve hostname: %s", host);
+//             return nullptr;
+//         }
 
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    int status = getaddrinfo(hostname.c_str(), nullptr, &hints, &res);
-    if (status != 0) {
-        ERROR("getaddrinfo failed: %s", gai_strerror(status));
-        return "";
-    }
-
-    void *addr;
-    if (res->ai_family == AF_INET) {
-        struct sockaddr_in *ipv4 = (struct sockaddr_in *)res->ai_addr;
-        addr = &(ipv4->sin_addr);
-    } else { // IPv6
-        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)res->ai_addr;
-        addr = &(ipv6->sin6_addr);
-    }
-
-    inet_ntop(res->ai_family, addr, ipstr, sizeof(ipstr));
-    freeaddrinfo(res);
-    return std::string(ipstr);
-}
-
-PGconn* connect_database() {
-    // "dbname=test user=postgres password=secret hostaddr=127.0.0.1 port=5432"
-    const char* conninfo = getenv("DATABASE_INFO");
-    if (!conninfo) {
-        DEBUG_INFO("DATABASE_INFO not set, falling back to POSTGRES_*");
-
-        const char* user = getenv("POSTGRES_USER");
-        const char* password = getenv("POSTGRES_PASSWORD");
-        const char* dbname = getenv("POSTGRES_DB");
-        const char* host = getenv("POSTGRES_HOST");
-        const char* port = getenv("POSTGRES_PORT");
-
-        if (!user || !password || !dbname || !host || !port)
-            return nullptr;
-
-        // 针对 PQconnectdb 无法自动处理主机名的缓解措施
-        std::string resolved_ip = resolve_hostname_to_ip(host);
-        if (resolved_ip.empty()) {
-            ERROR("Failed to resolve hostname: %s", host);
-            return nullptr;
-        }
-
-        char default_conninfo[512];
-        snprintf(default_conninfo, sizeof(default_conninfo), "dbname=%s user=%s password=%s host=%s port=%s",
-                 dbname, user, password, resolved_ip.c_str(), port);
+//         char default_conninfo[512];
+//         snprintf(default_conninfo, sizeof(default_conninfo), "dbname=%s user=%s password=%s host=%s port=%s",
+//                  dbname, user, password, resolved_ip.c_str(), port);
         
-        conninfo = default_conninfo;
-    }
+//         conninfo = default_conninfo;
+//     }
 
 
-    // 连接到 PostgreSQL 数据库
-    PGconn* pg_conn = PQconnectdb(conninfo);
-    if(PQstatus(pg_conn) != CONNECTION_OK)
-    {
-        ERROR("Connection to database failed: %s", PQerrorMessage(pg_conn));
-        PQfinish(pg_conn);
-        return nullptr;
-    }
-    return pg_conn;
-}
+//     // 连接到 PostgreSQL 数据库
+//     PGconn* pg_conn = PQconnectdb(conninfo);
+//     if(PQstatus(pg_conn) != CONNECTION_OK)
+//     {
+//         ERROR("Connection to database failed: %s", PQerrorMessage(pg_conn));
+//         PQfinish(pg_conn);
+//         return nullptr;
+//     }
+//     return pg_conn;
+// }
 
 HTTP_ERROR_TYPE POST_api_bind(HttpHandler* handler)
 {
-    string content_type;
-    if(handler->getHttpHeader("content-type", content_type) != ERR_SUCCESS)
-        return ERR_BAD_REQUEST;
-    // 我们只支持 JSON 格式数据
-    if(content_type.find("json") == string::npos)
-        return ERR_NOT_IMPLEMENTED;
-    // 解析 body
-    string body;
-    if(handler->getHttpBody(body) != ERR_SUCCESS)
-        return ERR_BAD_REQUEST;
-    // 解析 JSON
-    Document document;
-    if (document.Parse(body.c_str()).HasParseError())
-        return handler->sendErrorResponse("400", "Post Data is not a valid Json type");
-    // 判断document是否是一个对象
-    if (!document.IsObject())
-        return handler->sendErrorResponse("400", "Document is not a valid object");
-    // 检查是否包含deviceid字段，并且它的值是一个字符串
-    if (!document.HasMember("deviceid") || !document["deviceid"].IsString())
-        return handler->sendErrorResponse("400", "deviceid not found or not a string type");
-    string device_id = document["deviceid"].GetString();
+    // string content_type;
+    // if(handler->getHttpHeader("content-type", content_type) != ERR_SUCCESS)
+    //     return ERR_BAD_REQUEST;
+    // // 我们只支持 JSON 格式数据
+    // if(content_type.find("json") == string::npos)
+    //     return ERR_NOT_IMPLEMENTED;
+    // // 解析 body
+    // string body;
+    // if(handler->getHttpBody(body) != ERR_SUCCESS)
+    //     return ERR_BAD_REQUEST;
+    // // 解析 JSON
+    // Document document;
+    // if (document.Parse(body.c_str()).HasParseError())
+    //     return handler->sendErrorResponse("400", "Post Data is not a valid Json type");
+    // // 判断document是否是一个对象
+    // if (!document.IsObject())
+    //     return handler->sendErrorResponse("400", "Document is not a valid object");
+    // // 检查是否包含deviceid字段，并且它的值是一个字符串
+    // if (!document.HasMember("deviceid") || !document["deviceid"].IsString())
+    //     return handler->sendErrorResponse("400", "deviceid not found or not a string type");
+    // string device_id = document["deviceid"].GetString();
 
-    // 检查是否为空或长度不为36
-    if(device_id.empty() || device_id.size() != 36)
-        return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
+    // // 检查是否为空或长度不为36
+    // if(device_id.empty() || device_id.size() != 36)
+    //     return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
 
-    // query
-    const char* query = 
-        "WITH ins AS ("
-        "    INSERT INTO user_info (deviceid) "
-        "    VALUES ($1) "
-        "    ON CONFLICT (deviceid) "
-        "    DO UPDATE SET deviceid = EXCLUDED.deviceid "
-        "    RETURNING userid, CASE WHEN xmax = 0 THEN 'new' ELSE 'conflict' END AS status "
-        ") "
-        "SELECT * FROM ins;";
+    // // query
+    // const char* query = 
+    //     "WITH ins AS ("
+    //     "    INSERT INTO user_info (deviceid) "
+    //     "    VALUES ($1) "
+    //     "    ON CONFLICT (deviceid) "
+    //     "    DO UPDATE SET deviceid = EXCLUDED.deviceid "
+    //     "    RETURNING userid, CASE WHEN xmax = 0 THEN 'new' ELSE 'conflict' END AS status "
+    //     ") "
+    //     "SELECT * FROM ins;";
 
-    // 使用 PQexecParams 执行参数化查询
-    PGconn* pg_conn = connect_database();
-    if (!pg_conn)
-        return ERR_NOT_IMPLEMENTED;
+    // // 使用 PQexecParams 执行参数化查询
+    // PGconn* pg_conn = connect_database();
+    // if (!pg_conn)
+    //     return ERR_NOT_IMPLEMENTED;
 
-    const char* paramValues[1] = { device_id.c_str() };
-    PGresult* res = PQexecParams(pg_conn, query, 1, nullptr, paramValues, nullptr, nullptr, 0);
+    // const char* paramValues[1] = { device_id.c_str() };
+    // PGresult* res = PQexecParams(pg_conn, query, 1, nullptr, paramValues, nullptr, nullptr, 0);
 
-    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-        // 获取错误信息
-        char err_msg[0x100];
-        snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
-        PQclear(res);
-        PQfinish(pg_conn);
-        return handler->sendErrorResponse("500", err_msg);
-    }
+    // if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+    //     // 获取错误信息
+    //     char err_msg[0x100];
+    //     snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
+    //     PQclear(res);
+    //     PQfinish(pg_conn);
+    //     return handler->sendErrorResponse("500", err_msg);
+    // }
 
-    // 获取返回的 userid
-    const char* userid = PQgetvalue(res, 0, 0);
-    const char* status = PQgetvalue(res, 0, 1);
-    if (userid == nullptr || status == nullptr) {
-        PQclear(res);
-        PQfinish(pg_conn);
-        return ERR_INTERNAL_SERVER_ERR;
-    }
-    string response = !strcmp(status, "new") ? 
-        "{\"code\": 100, \"userid\": " + string(userid) + "}" :
-        "{\"code\": 102, \"userid\": " + string(userid) + "}";
+    // // 获取返回的 userid
+    // const char* userid = PQgetvalue(res, 0, 0);
+    // const char* status = PQgetvalue(res, 0, 1);
+    // if (userid == nullptr || status == nullptr) {
+    //     PQclear(res);
+    //     PQfinish(pg_conn);
+    //     return ERR_INTERNAL_SERVER_ERR;
+    // }
+    // string response = !strcmp(status, "new") ? 
+    //     "{\"code\": 100, \"userid\": " + string(userid) + "}" :
+    //     "{\"code\": 102, \"userid\": " + string(userid) + "}";
 
-    PQclear(res);
-    PQfinish(pg_conn);
+    // PQclear(res);
+    // PQfinish(pg_conn);
 
-    return handler->sendResponse("200", "OK", "application/json", response);
+    // return handler->sendResponse("200", "OK", "application/json", response);
 }
 
 HTTP_ERROR_TYPE POST_api_upload(HttpHandler* handler)
 {
-    string content_type;
-    if(handler->getHttpHeader("content-type", content_type) != ERR_SUCCESS)
-        return ERR_BAD_REQUEST;
-    // 我们只支持 JSON 格式数据
-    if(content_type.find("json") == string::npos)
-        return ERR_NOT_IMPLEMENTED;
-    // 解析 body
-    string body;
-    if(handler->getHttpBody(body) != ERR_SUCCESS)
-        return ERR_BAD_REQUEST;
-    // 解析 JSON
-    Document document;
-    if (document.Parse(body.c_str()).HasParseError())
-        return handler->sendErrorResponse("400", "Post Data is not a valid Json type");
-    // 判断document是否是一个对象
-    if (!document.IsObject())
-        return handler->sendErrorResponse("400", "Document is not a valid object");
-    // 检查是否包含 userid 和 data 字段，并且它的类型符合
-    if (!document.HasMember("data") || !document["data"].IsString() || !document.HasMember("userid") || !document["userid"].IsInt())
-        return handler->sendErrorResponse("400", "data/userid not found or wrong type");
-    string data = document["data"].GetString();
-    int userid = document["userid"].GetInt();
+    // string content_type;
+    // if(handler->getHttpHeader("content-type", content_type) != ERR_SUCCESS)
+    //     return ERR_BAD_REQUEST;
+    // // 我们只支持 JSON 格式数据
+    // if(content_type.find("json") == string::npos)
+    //     return ERR_NOT_IMPLEMENTED;
+    // // 解析 body
+    // string body;
+    // if(handler->getHttpBody(body) != ERR_SUCCESS)
+    //     return ERR_BAD_REQUEST;
+    // // 解析 JSON
+    // Document document;
+    // if (document.Parse(body.c_str()).HasParseError())
+    //     return handler->sendErrorResponse("400", "Post Data is not a valid Json type");
+    // // 判断document是否是一个对象
+    // if (!document.IsObject())
+    //     return handler->sendErrorResponse("400", "Document is not a valid object");
+    // // 检查是否包含 userid 和 data 字段，并且它的类型符合
+    // if (!document.HasMember("data") || !document["data"].IsString() || !document.HasMember("userid") || !document["userid"].IsInt())
+    //     return handler->sendErrorResponse("400", "data/userid not found or wrong type");
+    // string data = document["data"].GetString();
+    // int userid = document["userid"].GetInt();
 
-    // 检查是否为空或长度大于 256，VarChar(256)
-    if(data.empty() || data.size() > 256)
-        return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
+    // // 检查是否为空或长度大于 256，VarChar(256)
+    // if(data.empty() || data.size() > 256)
+    //     return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
 
-    // NOTE: 注意这里没有校验用户是否已经存在，因为 PDF 里没写
-    const char* query = "INSERT INTO user_data (userid, data) VALUES ($1, $2) "
-                        "ON CONFLICT (userid) "
-                        "DO UPDATE SET data = EXCLUDED.data";
+    // // NOTE: 注意这里没有校验用户是否已经存在，因为 PDF 里没写
+    // const char* query = "INSERT INTO user_data (userid, data) VALUES ($1, $2) "
+    //                     "ON CONFLICT (userid) "
+    //                     "DO UPDATE SET data = EXCLUDED.data";
 
-    PGconn* pg_conn = connect_database();
-    if (!pg_conn)
-        return ERR_NOT_IMPLEMENTED;
-    // 使用 PQexecParams 执行参数化查询
-    const char* paramValues[2] = { to_string(userid).c_str(), data.c_str() };
-    PGresult* res = PQexecParams(pg_conn, query, 2, nullptr, paramValues, nullptr, nullptr, 0);
+    // PGconn* pg_conn = connect_database();
+    // if (!pg_conn)
+    //     return ERR_NOT_IMPLEMENTED;
+    // // 使用 PQexecParams 执行参数化查询
+    // const char* paramValues[2] = { to_string(userid).c_str(), data.c_str() };
+    // PGresult* res = PQexecParams(pg_conn, query, 2, nullptr, paramValues, nullptr, nullptr, 0);
 
-    // 检查查询是否成功
-    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-        // 获取错误信息
-        char err_msg[0x100];
-        snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
-        PQclear(res);
-        PQfinish(pg_conn);
-        return handler->sendErrorResponse("500", err_msg);
-    }
+    // // 检查查询是否成功
+    // if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+    //     // 获取错误信息
+    //     char err_msg[0x100];
+    //     snprintf(err_msg, sizeof(err_msg), "PostgreSQL query failed: %s", PQresultErrorMessage(res));
+    //     PQclear(res);
+    //     PQfinish(pg_conn);
+    //     return handler->sendErrorResponse("500", err_msg);
+    // }
 
-    PQclear(res);
-    PQfinish(pg_conn);
+    // PQclear(res);
+    // PQfinish(pg_conn);
 
-    return handler->sendResponse("200", "OK", "application/json", "{\"code\": 100 }");
+    // return handler->sendResponse("200", "OK", "application/json", "{\"code\": 100 }");
 }
 
 int main(int argc, char* argv[])
@@ -386,8 +371,26 @@ int main(int argc, char* argv[])
         ERROR("Wrong THREAD_POOL_SIZE: %s", thread_pool_size_env);
         exit(EXIT_FAILURE);
     }
-    ThreadPool thread_pool(thread_pool_size);
+    std::shared_ptr<ThreadPool> thread_pool = std::make_shared<ThreadPool>(thread_pool_size);
     INFO("Thread Pool is started with %d threads", thread_pool_size);
+
+    // 连接数据库
+    const char* db_user = getenv("SERVER_POSTGRES_USER");
+    const char* db_password = getenv("SERVER_POSTGRES_PASSWORD");
+    const char* db_dbname = getenv("SERVER_POSTGRES_DB");
+    const char* db_host = getenv("SERVER_POSTGRES_HOST");
+    const char* db_port = getenv("SERVER_POSTGRES_PORT");
+
+    if (!db_user || !db_password || !db_dbname || !db_host || !db_port) {
+        ERROR("SERVER_POSTGRES_USER, SERVER_POSTGRES_PASSWORD, SERVER_POSTGRES_DB, SERVER_POSTGRES_HOST, SERVER_POSTGRES_PORT must be set");
+        return false;
+    }
+    std::unique_ptr<Timer> db_timer = std::make_unique<Timer>(TFD_NONBLOCK | TFD_CLOEXEC);
+    assert(db_timer->isValid());
+    std::shared_ptr<ConnectionPool> db_conn_pool = std::make_shared<ConnectionPool>
+        (db_host, db_port, db_user, db_password, db_dbname, thread_pool_size);
+    std::shared_ptr<DBPipeline> query_buffer = std::make_shared<DBPipeline> (db_conn_pool, std::move(db_timer));
+    INFO("Database Connection Pool is started with %d connection", thread_pool_size);
 
     // 空闲 fd，用于关闭溢出的文件描述符
     int idle_fd = open("/dev/null", O_RDONLY | O_CLOEXEC); 
@@ -399,22 +402,31 @@ int main(int argc, char* argv[])
     }
     
     // 注册 Post Router
-    Router router;
-    router.registerRoute("/api/bind", POST_api_bind);
-    router.registerRoute("/api/upload", POST_api_upload);
+    std::shared_ptr<Router> router = std::make_shared<Router>();
+    router->registerRoute("/api/bind", POST_api_bind);
+    router->registerRoute("/api/upload", POST_api_upload);
 
     // 声明一个 epoll 实例,该实例将在整个main函数结束时被释放
-    Epoll epoll(EPOLL_CLOEXEC);
-    assert(epoll.isEpollValid());
+    std::shared_ptr<Epoll> epoll = std::make_shared<Epoll>(EPOLL_CLOEXEC);
+    assert(epoll->isEpollValid());
+    
+    std::shared_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> http_handlers = \
+        std::make_shared<std::unordered_map<int, std::shared_ptr<HttpHandler>>>();
+
+    std::unique_ptr<EpollEventCallback> listen_epollevent = std::make_unique<EpollEventCallback>(
+        [epoll, thread_pool, http_handlers, listen_fd, &idle_fd, router](epoll_event event) {
+            // 在 lambda 中调用 handleNewConnections
+            handleNewConnections(http_handlers, epoll, thread_pool, listen_fd, &idle_fd, router);
+        }
+    );
     // 将 listen_fd 添加进 epoll 实例
-    EpollEvent* listen_epollevent = new EpollEvent{listen_fd, nullptr};
-    epoll.add(listen_fd, listen_epollevent, EPOLLET | EPOLLIN);
+    epoll->add(listen_fd, &listen_epollevent, EPOLLET | EPOLLIN);
 
     // 开始事件循环
     for(;;)
     {
         // 阻塞等待新的事件
-        int event_num = epoll.wait(-1);
+        int event_num = epoll->wait(-1);
         // 如果报错
         if(event_num < 0)
         {
@@ -435,19 +447,12 @@ int main(int argc, char* argv[])
         for(int i = 0; i < event_num; i++)
         {
             // 获取事件相关的信息
-            epoll_event&& event = epoll.getEvent(static_cast<size_t>(i));
-            EpollEvent* curr_epoll_event = static_cast<EpollEvent*>(event.data.ptr);
-            
-            int fd = curr_epoll_event->fd;
-            
-            // 如果当前文件描述符是 listen_fd, 则建立连接
-            if(fd == listen_fd)
-                handleNewConnections(&epoll, listen_fd, &idle_fd, router);
-            else
-                handleOldConnection(&epoll, fd, &thread_pool, &event);
+            epoll_event&& event = epoll->getEvent(static_cast<size_t>(i));
+            std::unique_ptr<EpollEventCallback>* curr_epoll_event_callback = static_cast<std::unique_ptr<EpollEventCallback>*>(event.data.ptr);
+            (**curr_epoll_event_callback)(event);
         }
     }
-    delete listen_epollevent;
+    listen_epollevent.reset();
 
     return 0;
 }

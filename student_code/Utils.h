@@ -4,12 +4,14 @@
 #include <iostream>
 #include <cstring>
 #include <csignal>
+#include <vector>
 
 using std::cout;
 using std::cerr;
 using std::endl;
 using std::string;
 using std::ostream;
+using std::vector;
 
 /**
  * @brief  绑定一个端口号并返回一个 fd
@@ -105,5 +107,13 @@ size_t closeRemainingConnect(int listen_fd, int* idle_fd);
  * @return 返回从属关系
  */ 
 bool is_path_parent(const string& parent_path, const string& child_path);
+
+
+/**
+ * @brief 获取给定 hostname 所对应的所有 ipv4 地址
+ * @param hostname 待解析的 hostname
+ * @return 返回所有解析到的 ipv4 地址
+ */
+vector<string> resolve_hostname_to_ipv4(const string& hostname);
 
 #endif

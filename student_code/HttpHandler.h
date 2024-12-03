@@ -2,14 +2,11 @@
 #define HTTPHANDLER_H
 
 #include <iostream>
-#include <map>
-#include <functional>
 #include <unordered_map>
+#include <functional>
 
 #include "Epoll.h"
 #include "Timer.h"
-
-using namespace std;
 
 // HttpHandler内部错误 
 enum HTTP_ERROR_TYPE {
@@ -55,17 +52,19 @@ public:
     
     /**
      * @brief   显式指定 client fd
-     * @param   epoll_fd    epoll 实例相关的描述符
+     * @param   epoll    epoll 实例
      * @param   client_fd   连接的 client_fd
      * @param   timer       给当前连接限制时间的timer
+     * @param   router     路由表
      */
-    explicit HttpHandler(Epoll* epoll, int client_fd, Timer* timer, Router& router);
+    explicit HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer>&& timer, std::shared_ptr<Router> router);
 
     /**
      * @brief   释放所有 HttpHandler 所使用的资源
      * @note    注意,不会主动关闭 client_fd
      */
     ~HttpHandler();
+    void destroy();
 
     /**
      * @brief   为当前连接启动事件循环
@@ -73,18 +72,34 @@ public:
      *          如果完成了所有的事件,需要被释放时则返回 false
      * @note    在执行事件循环开始之前,一定要设置 client fd
      */ 
-    bool RunEventLoop();
+    bool RunEventLoopAndReEpoll();
 
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
-    Epoll* getEpoll()           { return epoll_; }
-    Timer* getTimer()           { return timer_; }
+    int getTimerFd()           { 
+        assert(timer_); 
+        return timer_->getFd(); 
+    }
     // 获取 client_fd 和 timer_fd 所需要设置的 epoll 触发条件
-    int getClientTriggerCond() { return EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP; }
-    int getTimerTriggerCond()  { return EPOLLET | EPOLLIN | EPOLLONESHOT; }
+    constexpr int getClientTriggerCond() { return EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP; }
+    constexpr int getTimerTriggerCond()  { return EPOLLET | EPOLLIN | EPOLLONESHOT; }
     // 获取 client 和 timer 的 epoll event
-    void* getClientEpollEvent() { return &client_event_; }
-    void* getTimerEpollEvent()  { return &timer_event_; }
+    void setClientEpollEventCallback(std::unique_ptr<EpollEventCallback>&& cb) { 
+        assert(!client_event_);
+        client_event_ = std::move(cb); 
+    }
+    void setTimerEpollEventCallback(std::unique_ptr<EpollEventCallback>&& cb) { 
+        assert(!timer_event_);
+        timer_event_ = std::move(cb); 
+    }
+    std::unique_ptr<EpollEventCallback>* const getClientEpollEventCallback() { 
+        assert(client_event_);
+        return &client_event_; 
+    }
+    std::unique_ptr<EpollEventCallback>* const getTimerEpollEventCallback()  { 
+        assert(timer_event_);
+        return &timer_event_; 
+    }
 
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
@@ -162,21 +177,23 @@ private:
 
     // 相关描述符
     int client_fd_;
-    EpollEvent client_event_;
+    // 注意！！！：该 Callback 会持有 epoll, handler(this), thread_pool 的引用
+    std::unique_ptr<EpollEventCallback> client_event_;
 
-    Timer* timer_;
-    EpollEvent timer_event_;
+    std::unique_ptr<Timer> timer_;
+    // 注意！！！：该 Callback 会持有 handler(this) 的引用
+    std::unique_ptr<EpollEventCallback> timer_event_;
 
-    Epoll* epoll_;
+    std::shared_ptr<Epoll> epoll_;
 
     // http 请求包的所有数据
-    string request_;
+    std::string request_;
     // http 头部
-    map<string, string> headers_; 
+    std::unordered_map<string, string> headers_; 
     // 请求方式
     METHOD_TYPE method_;
     // 请求路径
-    string path_;
+    std::string path_;
     // http版本号
     HTTP_VERSION http_version_;
     // 当前handler 状态
@@ -184,18 +201,18 @@ private:
     // 重试次数
     int againTimes_;
     // http body 数据
-    string http_body_;
+    std::string http_body_;
 
     // 是否是 `持续连接`
     bool isKeepAlive_;
 
     // 路由表
-    Router& router_;
+    std::shared_ptr<Router> router_;
 
     /** 
      * @brief 当前解析读入数据的位置
      * @note 该成员变量只在 
-     *      readRequest -> parseURI -> parseHttpHeader -> RunEventLoop 
+     *      readRequest -> parseURI -> parseHttpHeader -> RunEventLoopAndReEpoll 
      * 内部中使用
      */
     size_t curr_parse_pos_;
@@ -257,7 +274,7 @@ class MimeType
 {
 private:
     // (suffix -> type)
-    map<string, string> mime_map_;
+    std::unordered_map<string, string> mime_map_;
 
     string getMineType_(string suffix)
     {
