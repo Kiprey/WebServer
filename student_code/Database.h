@@ -57,8 +57,18 @@ class DBPipeline {
 public:
     using QueryCallback = std::function<void(const pqxx::result&, bool)>;
 
-    DBPipeline(std::shared_ptr<ConnectionPool> pool, std::unique_ptr<Timer>&& timer, int poll_ms) : pool_(pool), timer_(std::move(timer)) {
+    DBPipeline(std::shared_ptr<ConnectionPool> pool, std::unique_ptr<Timer>&& timer, int poll_ms, size_t retain_size) : 
+        pool_(pool), conn_(pool_->aquireConnection()), work_(std::make_unique<pqxx::work>(*conn_)), 
+        pipeline_work_(std::make_unique<pqxx::pipeline>(*work_)), timer_(std::move(timer)) {
+
+        pipeline_work_->retain(retain_size); 
         timer_->setTime(0, poll_ms * 1000);
+    }
+    ~DBPipeline() {
+        timer_->cancel();
+        pipeline_work_->complete();
+        work_->commit();
+        pool_->releaseConnection(std::move(conn_));
     }
 
     /**
@@ -71,7 +81,7 @@ public:
      * @brief 查询所有提交的查询
      * @note 会按照提交的顺序返回查询结果
      */
-    void queryAll();
+    void poll();
 
     int getTimerFd() { return timer_->getFd(); }
     
@@ -80,31 +90,13 @@ public:
     std::shared_ptr<ConnectionPool> getPool() { return pool_; }
 
 private:
-    class PipelineInFlight {
-    public:
-        PipelineInFlight(std::shared_ptr<ConnectionPool> pool, size_t retain_size) : 
-            pool_(pool), conn_(pool_->aquireConnection()), 
-            work_(std::make_unique<pqxx::work>(*conn_)), pipeline_work_(std::make_unique<pqxx::pipeline>(*work_)) {
-            pipeline_work_->retain(retain_size);
-        }
-        ~PipelineInFlight() {
-            pipeline_work_->complete();
-            pool_->releaseConnection(std::move(conn_));
-        }
-        void submitQuery(const std::string& query, QueryCallback callback);
-        bool poll();
-    private:
-        std::shared_ptr<ConnectionPool> pool_;
-        std::unique_ptr<pqxx::connection> conn_;
-        std::unique_ptr<pqxx::work> work_;
-        std::unique_ptr<pqxx::pipeline> pipeline_work_;
-        std::unordered_map<pqxx::pipeline::query_id, QueryCallback> queries_in_flight;
-    };
-
     std::shared_ptr<ConnectionPool> pool_;
+    std::unique_ptr<pqxx::connection> conn_;
+    std::unique_ptr<pqxx::work> work_;
+    std::unique_ptr<pqxx::pipeline> pipeline_work_;
+    std::unordered_map<pqxx::pipeline::query_id, QueryCallback> queries_in_flight;
+
     std::unique_ptr<Timer> timer_;
-    std::queue<std::pair<std::string, QueryCallback>> queries_;
-    std::list<std::unique_ptr<PipelineInFlight>> pipelines_in_flight_;
     std::mutex mutex_;
     EpollEventCallback timer_event_;
 };

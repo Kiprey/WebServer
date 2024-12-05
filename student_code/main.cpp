@@ -375,12 +375,12 @@ int main(int argc, char* argv[])
     std::shared_ptr<ConnectionPool> db_conn_pool = std::make_shared<ConnectionPool>
         (db_host, db_port, db_user, db_password, db_dbname, thread_pool_size);
     // poll the database every 20ms
-    std::shared_ptr<DBPipeline> db_pipeline = std::make_shared<DBPipeline> (db_conn_pool, std::move(db_timer), 20);
+    std::shared_ptr<DBPipeline> db_pipeline = std::make_shared<DBPipeline> (db_conn_pool, std::move(db_timer), 20, 20);
     EpollEventCallback db_epollevent = [epoll, thread_pool, db_pipeline](epoll_event event) { 
         epoll->modify(db_pipeline->getTimerFd(), nullptr, 0);
         thread_pool->appendTask(
             [db_pipeline, epoll](void* arg) { 
-                db_pipeline->queryAll(); 
+                db_pipeline->poll(); 
                 epoll->modify(db_pipeline->getTimerFd(), db_pipeline->getTimerEpollEventCallback(), TIMER_EPOLL_TRIGGER_COND);
             },
             nullptr, 

@@ -11,7 +11,7 @@ ENV SERVER_POSTGRES_HOST=localhost
 ENV SERVER_POSTGRES_PORT=5432
 
 # second, set max thread pool size
-ENV THREAD_POOL_SIZE=4
+ENV THREAD_POOL_SIZE=2
 
 # third, install dependencies
 RUN apt-get install -y libpqxx-dev rapidjson-dev

@@ -20,6 +20,7 @@ ConnectionPool::ConnectionPool(
                             " connect_timeout=3";
         // 首先尝试连接一下看看哪个才是真的能连上的
         try {
+            INFO("Connecting to database %s:%s", resolved_ip.c_str(), postgres_port.c_str());
             if (createConnection()) {
                 INFO("Connected to database %s:%s", resolved_ip.c_str(), postgres_port.c_str());
                 is_success = true;
@@ -27,7 +28,7 @@ ConnectionPool::ConnectionPool(
             }
             // 无需处理这个连接，因为它会自动释放
         } catch (const std::exception& e) {
-            ERROR("Error connecting to database %s:%s: %s", resolved_ip.c_str(), postgres_port.c_str(), e.what());
+            ERROR("Error connecting to database %s:%s: %s, will try next...", resolved_ip.c_str(), postgres_port.c_str(), e.what());
         }
     }
     if (!is_success) {
@@ -77,31 +78,6 @@ std::unique_ptr<pqxx::connection> ConnectionPool::createConnection() {
 
 void DBPipeline::submitQuery(const std::string& query, QueryCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
-    queries_.emplace(query, callback);
-}
-
-void DBPipeline::queryAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto iter = pipelines_in_flight_.begin(); iter != pipelines_in_flight_.end();) {
-        if ((*iter)->poll())
-            iter = pipelines_in_flight_.erase(iter);
-        else
-            ++iter;
-    }
-
-    // submit queries in batch
-    if (queries_.size() > 0) {
-        std::unique_ptr<PipelineInFlight> pipeline_in_flight = std::make_unique<PipelineInFlight>(pool_, queries_.size());
-        while (queries_.size() > 0) {
-            auto& query_item = queries_.front();
-            pipeline_in_flight->submitQuery(query_item.first, std::move(query_item.second));
-            queries_.pop();
-        }
-        pipelines_in_flight_.push_back(std::move(pipeline_in_flight));
-    }
-}
-
-void DBPipeline::PipelineInFlight::submitQuery(const std::string& query, QueryCallback callback) {
     try {
         pqxx::pipeline::query_id query_id = pipeline_work_->insert(query);
         queries_in_flight[query_id] = callback;
@@ -110,7 +86,8 @@ void DBPipeline::PipelineInFlight::submitQuery(const std::string& query, QueryCa
     }
 }
 
-bool DBPipeline::PipelineInFlight::poll() {
+void DBPipeline::poll() {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = queries_in_flight.begin(); it != queries_in_flight.end();) {
         auto& query_id = it->first;
         auto& callback = it->second;
@@ -129,5 +106,9 @@ bool DBPipeline::PipelineInFlight::poll() {
             it = queries_in_flight.erase(it);
         }
     }
-    return queries_in_flight.empty();
+    if (queries_in_flight.empty()) {
+        pipeline_work_->complete();
+        work_->commit();
+        pipeline_work_ = std::make_unique<pqxx::pipeline>(*work_);
+    }
 }

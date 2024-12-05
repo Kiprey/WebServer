@@ -26,7 +26,7 @@ docker-compose up
 
   ```bash
   export SERVER_POSTGRES_USER=postgres SERVER_POSTGRES_PASSWORD=postgres SERVER_POSTGRES_DB=postgres SERVER_POSTGRES_HOST=localhost SERVER_POSTGRES_PORT=5432
-  export THREAD_POOL_SIZE=4
+  export THREAD_POOL_SIZE=2
   ./server <port> [<www_dir>]
   ```
 
