@@ -4,6 +4,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <functional>
+#include <memory>
 
 #include "Epoll.h"
 #include "Database.h"
@@ -97,6 +98,11 @@ public:
     void setTimerEpollEventCallback(EpollEventCallback&& cb) { timer_event_ = std::move(cb); }
     EpollEventCallback* const getClientEpollEventCallback() { return &client_event_; }
     EpollEventCallback* const getTimerEpollEventCallback()  { return &timer_event_; }
+    void setWeakThis(std::weak_ptr<HttpHandler> ptr) { 
+        weak_this = ptr; 
+        assert(weak_this.lock().get() == this);
+    }
+    std::weak_ptr<HttpHandler> getWeakThis() { return weak_this; }
 
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
@@ -190,6 +196,7 @@ private:
 
     // 自毁函数
     std::function<void(void)> destructor_;
+    std::weak_ptr<HttpHandler> weak_this;
 
     // 相关描述符
     int client_fd_;

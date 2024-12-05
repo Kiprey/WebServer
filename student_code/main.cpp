@@ -15,8 +15,8 @@
 #include "Database.h"
 
 enum TASK_PRIORITY {
-    PARSE_HTTP_REQUEST = 0, // lowest priority
-    QUERY_DATABASE = 1,     // highest priority
+    QUERY_DATABASE = 0,     // lowest priority
+    PARSE_HTTP_REQUEST = 1, // highest priority
 };
 
 
@@ -118,6 +118,7 @@ void handleNewConnections(
 
             // 准备两个 weak_ptr
             std::weak_ptr<HttpHandler> weak_handler = client_handler;
+            client_handler->setWeakThis(weak_handler);
             std::weak_ptr<HttpHandlerRegistry> weak_registry = http_handler_registry;
 
             // 创建一个自毁装置
@@ -238,7 +239,10 @@ HTTP_ERROR_TYPE POST_api_bind(HttpHandler* handler)
         ") "
         "SELECT * FROM ins;";
     
-    handler->sendDBQuery(query, [handler](const pqxx::result& res, bool is_success) {
+    auto weak_handler = handler->getWeakThis();
+    handler->sendDBQuery(query, [weak_handler](const pqxx::result& res, bool is_success) {
+        auto handler = weak_handler.lock();
+        if (!handler) return;
         handler->finishDBQuery();
         if (!is_success) {
             handler->sendErrorResponse("500", "Internal Server Error");
@@ -294,7 +298,10 @@ HTTP_ERROR_TYPE POST_api_upload(HttpHandler* handler)
             handler->escapeDBString(data) + "\')"
         " ON CONFLICT (userid) DO UPDATE SET data = EXCLUDED.data";
 
-    handler->sendDBQuery(query, [handler](const pqxx::result& res, bool is_success) {
+    auto weak_handler = handler->getWeakThis();
+    handler->sendDBQuery(query, [weak_handler](const pqxx::result& res, bool is_success) {
+        auto handler = weak_handler.lock();
+        if (!handler) return;
         handler->finishDBQuery();
         if (!is_success) {
             handler->sendErrorResponse("500", "Internal Server Error");

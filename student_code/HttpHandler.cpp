@@ -59,6 +59,7 @@ HttpHandler::~HttpHandler() {
          "Connection Closed (socket: %d)"
          "------------------------",
          client_fd_);
+    timer_->cancel();
     timer_.reset();
     close(client_fd_);
 }
