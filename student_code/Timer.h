@@ -2,6 +2,10 @@
 #define TIMER_H
 
 #include <sys/timerfd.h> 
+#include <sys/epoll.h>
+
+// 获取 client_fd 和 timer_fd 所需要设置的 epoll 触发条件
+constexpr int TIMER_EPOLL_TRIGGER_COND = EPOLLET | EPOLLIN | EPOLLONESHOT;
 
 class Timer
 {

@@ -16,7 +16,7 @@
 #include "MutexLock.h"
 #include "Utils.h"
 
-int socket_bind_and_listen(int port)
+int socketBindAndListen(int port)
 {
     int listen_fd = 0;
     // 开始创建 socket, 注意这是阻塞模式的socket
@@ -219,14 +219,14 @@ size_t closeRemainingConnect(int listen_fd, int* idle_fd) {
     return count;
 }
 
-bool is_path_parent(const string& parent_path, const string& child_path) {
+bool isPathParent(const string& parent_path, const string& child_path) {
     bool result = false;
     char* parent_p = nullptr, *child_p = nullptr;
     char separator;
 
     parent_p = canonicalize_file_name(parent_path.c_str());
     if(!parent_p) {
-        ERROR("is_path_parent failed, cannot get parent path [%s] (%s)", 
+        ERROR("isPathParent failed, cannot get parent path [%s] (%s)", 
               parent_path.c_str(), 
               strerror(errno));
         goto clean_parent;
@@ -234,7 +234,7 @@ bool is_path_parent(const string& parent_path, const string& child_path) {
 
     child_p = canonicalize_file_name(child_path.c_str());
     if(!child_p) {
-        ERROR("is_path_parent failed, cannot get child path [%s] (%s)", 
+        ERROR("isPathParent failed, cannot get child path [%s] (%s)", 
             child_path.c_str(), 
             strerror(errno));
         goto clean_child;
@@ -267,7 +267,7 @@ clean_parent:
     return result;
 }
 
-std::vector<std::string> resolve_hostname_to_ipv4(const std::string& hostname) {
+std::vector<std::string> resolveHostnameToIPv4(const std::string& hostname) {
     struct addrinfo hints, *res, *p;
     std::vector<std::string> ip_addresses;
     char ipstr[INET_ADDRSTRLEN];

@@ -17,6 +17,7 @@
 #include "HttpHandler.h"
 #include "ThreadPool.h"
 #include "Log.h"
+#include "Database.h"
 #include "Utils.h"
 
 // 声明一下该静态成员变量
@@ -35,9 +36,15 @@ HTTP_ERROR_TYPE Router::route(const std::string& path, HttpHandler* handler) {
     return ERR_NOT_FOUND; // 如果没有找到匹配的路由，直接返回 404
 }
 
-HttpHandler::HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer> timer, std::shared_ptr<Router> router) 
+HttpHandler::HttpHandler(
+    std::shared_ptr<Epoll> epoll, 
+    int client_fd, 
+    std::unique_ptr<Timer> timer, 
+    std::shared_ptr<Router> router, 
+    std::shared_ptr<DBPipeline> db_pipeline
+) 
       // 初始化 client 的 fd 和 epoll event
-    : client_fd_(client_fd), timer_(std::move(timer)), epoll_(epoll), router_(router), curr_parse_pos_(0)
+    : client_fd_(client_fd), timer_(std::move(timer)), epoll_(epoll), router_(router), db_pipeline_(db_pipeline), curr_parse_pos_(0)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
@@ -251,7 +258,7 @@ HTTP_ERROR_TYPE HttpHandler::handleRequest()
         // 获取目标文件的信息
         string real_path = www_path + "/" + path_;
         // 检测目录穿越
-        if(!is_path_parent(www_path, real_path))
+        if(!isPathParent(www_path, real_path))
             return ERR_NOT_FOUND;
 
         struct stat st;
@@ -332,6 +339,11 @@ bool HttpHandler::handleErrorType(HTTP_ERROR_TYPE err)
     case ERR_SUCCESS:
         isSuccess = true;
         /* 注意这里没有设置 STATE */
+        break;
+    case ERR_NEED_CALLBACK:
+        // 需要回调,则直接返回
+        isSuccess = true;
+        state_ = STATE_NEED_CALLBACK;
         break;
     case ERR_READ_REQUEST_FAIL:
         ERROR("HTTP Read request failed ! (%s)", strerror(errno));
@@ -457,8 +469,11 @@ bool HttpHandler::RunEventLoopAndReEpoll()
             state_ = STATE_ANALYSI_REQUEST;
     }
     // 4. 开始处理数据
-    if(state_ == STATE_ANALYSI_REQUEST && handleErrorType(handleRequest()))
-        state_ = STATE_FINISHED;
+    if(state_ == STATE_ANALYSI_REQUEST && handleErrorType(handleRequest())) {
+        // 状态可能会发生改变
+        if (state_ == STATE_ANALYSI_REQUEST)
+            state_ = STATE_FINISHED;
+    }
 
     // 开始处理当前状态
     // 如果这个过程中有任何非致命错误, 或者当前过程圆满结束
@@ -467,14 +482,25 @@ bool HttpHandler::RunEventLoopAndReEpoll()
         // 如果 keep Alive, 则重置状态, 并跳出 if 到最后的return 处重新放入 epoll 中
         if(isKeepAlive_)
             reset();
-        else 
+        else {
             // 否则,既然已经发生了错误 / 完成了请求,则直接销毁当前实例
+            destructNow();
             return false;
+        }
     }
-    // 如果是致命错误,则直接返回 false
-    else if(state_ == STATE_FATAL_ERROR)
+    // 如果是致命错误,则直接终止
+    else if(state_ == STATE_FATAL_ERROR) {
+        destructNow();
         return false;
+    }
+    else if(state_ == STATE_NEED_CALLBACK) {
+        // 如果需要回调,则暂时不注册 epoll 事件
+        return false;
+    }
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
+    bool ret1 = epoll_->modify(getTimerFd(), getTimerEpollEventCallback(), TIMER_EPOLL_TRIGGER_COND);
+    bool ret2 = epoll_->modify(getClientFd(), getClientEpollEventCallback(), CLIENT_EPOLL_TRIGGER_COND);
+    assert(ret1 && ret2);
     return true;
 }

@@ -10,6 +10,7 @@
 #include <functional>
 #include "Log.h"
 #include "Timer.h"
+#include "Epoll.h"
 
 class ConnectionPool {
 public:
@@ -54,21 +55,29 @@ private:
 
 class DBPipeline {
 public:
-    using QueryCallback = std::function<void(const pqxx::result&)>;
+    using QueryCallback = std::function<void(const pqxx::result&, bool)>;
 
-    DBPipeline(std::shared_ptr<ConnectionPool> pool, std::unique_ptr<Timer>&& timer) : pool_(pool), timer_(std::move(timer)) {}
+    DBPipeline(std::shared_ptr<ConnectionPool> pool, std::unique_ptr<Timer>&& timer, int poll_ms) : pool_(pool), timer_(std::move(timer)) {
+        timer_->setTime(0, poll_ms * 1000);
+    }
 
     /**
      * @brief 提交一个查询
      * @param query    查询语句
      * @param callback 查询完成后的回调函数
      */
-    void submit_query(const std::string& query, QueryCallback callback);
+    void submitQuery(const std::string& query, QueryCallback callback);
     /**
      * @brief 查询所有提交的查询
      * @note 会按照提交的顺序返回查询结果
      */
-    void query_all();
+    void queryAll();
+
+    int getTimerFd() { return timer_->getFd(); }
+    
+    void setTimerEpollEventCallback(EpollEventCallback&& cb) { timer_event_ = std::move(cb); }
+    EpollEventCallback* const getTimerEpollEventCallback()  { return &timer_event_; }
+    std::shared_ptr<ConnectionPool> getPool() { return pool_; }
 
 private:
     class PipelineInFlight {
@@ -82,7 +91,7 @@ private:
             pipeline_work_->complete();
             pool_->releaseConnection(std::move(conn_));
         }
-        void submit_query(const std::string& query, QueryCallback callback);
+        void submitQuery(const std::string& query, QueryCallback callback);
         bool poll();
     private:
         std::shared_ptr<ConnectionPool> pool_;
@@ -97,5 +106,6 @@ private:
     std::queue<std::pair<std::string, QueryCallback>> queries_;
     std::list<std::unique_ptr<PipelineInFlight>> pipelines_in_flight_;
     std::mutex mutex_;
+    EpollEventCallback timer_event_;
 };
 #endif 

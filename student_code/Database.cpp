@@ -7,7 +7,7 @@ ConnectionPool::ConnectionPool(
     const string& postgres_user, const string& postgres_password,
     const string& postgres_dbname, size_t pool_size) : pool_size_(pool_size) {
 
-    vector<string> resolved_ips = resolve_hostname_to_ipv4(postgres_host);
+    vector<string> resolved_ips = resolveHostnameToIPv4(postgres_host);
     
     bool is_success = false;
     for (const string& resolved_ip : resolved_ips) {
@@ -75,12 +75,12 @@ std::unique_ptr<pqxx::connection> ConnectionPool::createConnection() {
     }
 }
 
-void DBPipeline::submit_query(const std::string& query, QueryCallback callback) {
+void DBPipeline::submitQuery(const std::string& query, QueryCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     queries_.emplace(query, callback);
 }
 
-void DBPipeline::query_all() {
+void DBPipeline::queryAll() {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto iter = pipelines_in_flight_.begin(); iter != pipelines_in_flight_.end();) {
         if ((*iter)->poll())
@@ -94,14 +94,14 @@ void DBPipeline::query_all() {
         std::unique_ptr<PipelineInFlight> pipeline_in_flight = std::make_unique<PipelineInFlight>(pool_, queries_.size());
         while (queries_.size() > 0) {
             auto& query_item = queries_.front();
-            pipeline_in_flight->submit_query(query_item.first, std::move(query_item.second));
+            pipeline_in_flight->submitQuery(query_item.first, std::move(query_item.second));
             queries_.pop();
         }
         pipelines_in_flight_.push_back(std::move(pipeline_in_flight));
     }
 }
 
-void DBPipeline::PipelineInFlight::submit_query(const std::string& query, QueryCallback callback) {
+void DBPipeline::PipelineInFlight::submitQuery(const std::string& query, QueryCallback callback) {
     try {
         pqxx::pipeline::query_id query_id = pipeline_work_->insert(query);
         queries_in_flight[query_id] = callback;
@@ -118,13 +118,14 @@ bool DBPipeline::PipelineInFlight::poll() {
         try {
             pipeline_work_->resume();
             if (pipeline_work_->is_finished(query_id)) {
-                callback(pipeline_work_->retrieve(query_id));
+                callback(pipeline_work_->retrieve(query_id), true);
                 it = queries_in_flight.erase(it);
             } else {
                 ++it;
             }
         } catch (const std::exception& e) {
             ERROR("Error retrieving query result: %s", e.what());
+            callback(pqxx::result(), false);
             it = queries_in_flight.erase(it);
         }
     }

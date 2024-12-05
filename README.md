@@ -133,5 +133,5 @@ docker-compose up
 
 ## TODO
 
-- 由于 main.cpp 里的交叉引用和生命周期问题，导致程序 bug 重重
-- 未能完成 database 异步获取的效果。
+- 存在一个请求一直返回出错的情况
+- 需要考虑到 callback 的指针可能失效的情况

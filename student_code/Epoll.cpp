@@ -41,7 +41,6 @@ bool Epoll::add(int fd, void* data, int event)
     ep_event.events = event;
     ep_event.data.ptr = data;
 
-    DEBUG_INFO("Add fd(%d) to epoll", fd);
     if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) == -1) {
         WARN("Add fd(%d) from epoll failed! (%s)", fd, strerror(errno));
         return false;
@@ -58,7 +57,6 @@ bool Epoll::modify(int fd, void* data, int event)
     ep_event.events = event;
     ep_event.data.ptr = data;
     
-    DEBUG_INFO("Modify fd(%d) to epoll", fd);
     if(epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) == -1) {
         WARN("Modify fd(%d) from epoll failed! (%s)", fd, strerror(errno));
         return false;
@@ -71,7 +69,6 @@ bool Epoll::del(int fd)
     if(!isEpollValid())
         return false;
 
-    DEBUG_INFO("Delete fd(%d) to epoll", fd);
     if(epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) == -1) {
         WARN("Delete fd(%d) from epoll failed! (%s)", fd, strerror(errno));
         return false;

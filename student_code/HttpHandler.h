@@ -6,12 +6,17 @@
 #include <functional>
 
 #include "Epoll.h"
+#include "Database.h"
 #include "Timer.h"
 #include "MutexLock.h"
+
+// 获取 client_fd 所需要设置的 epoll 触发条件
+constexpr int CLIENT_EPOLL_TRIGGER_COND = EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP;
 
 // HttpHandler内部错误 
 enum HTTP_ERROR_TYPE {
     ERR_SUCCESS = 0,                // 无错误
+    ERR_NEED_CALLBACK,              // 需要回调
 
     ERR_READ_REQUEST_FAIL,          // 读取请求数据失败
     ERR_AGAIN,                      // 读取的数据不够,需要等待下一次读取到的数据再来解析
@@ -57,8 +62,15 @@ public:
      * @param   client_fd   连接的 client_fd
      * @param   timer       给当前连接限制时间的timer
      * @param   router     路由表
+     * @param   db_pipeline 数据库连接
      */
-    explicit HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer> timer, std::shared_ptr<Router> router);
+    explicit HttpHandler(
+        std::shared_ptr<Epoll> epoll, 
+        int client_fd, 
+        std::unique_ptr<Timer> timer, 
+        std::shared_ptr<Router> router,
+        std::shared_ptr<DBPipeline> db_pipeline
+    );
 
     /**
      * @brief   释放所有 HttpHandler 所使用的资源
@@ -78,9 +90,6 @@ public:
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
     int getTimerFd()           { return timer_->getFd(); }
-    // 获取 client_fd 和 timer_fd 所需要设置的 epoll 触发条件
-    constexpr int getClientTriggerCond() { return EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP; }
-    constexpr int getTimerTriggerCond()  { return EPOLLET | EPOLLIN | EPOLLONESHOT; }
     void setDestructor(std::function<void(void)>&& callback) { destructor_ = callback; }
     void destructNow() { if (destructor_) destructor_(); }
     // 获取 client 和 timer 的 epoll event
@@ -93,12 +102,28 @@ public:
     static void setWWWPath(string path) { www_path = path; };
     static string getWWWPath()          { return www_path; }
 
+    // 发送一个数据库请求
+    std::string escapeDBString(const std::string& str) {
+        auto pool = db_pipeline_->getPool(); 
+        auto conn = pool->aquireConnection();
+        string result = conn->esc(str);
+        pool->releaseConnection(std::move(conn));
+        return result;
+    }
+    void sendDBQuery(const std::string& query, DBPipeline::QueryCallback callback) { db_pipeline_->submitQuery(query, callback); }
+    // 注册在数据库请求中的回调函数必须显式调用该函数来结束数据库请求
+    void finishDBQuery() { 
+        state_ = STATE_FINISHED; 
+        RunEventLoopAndReEpoll();
+    }
+
     // HttpHandler 内部状态
     enum STATE_TYPE {
         STATE_PARSE_URI,          // 解析 HTTP 报文中的第一行, [METHOD URI HTTP_VERSION]
         STATE_PARSE_HEADER,       // 解析 HTTP header
         STATE_PARSE_BODY,         // 解析 HTTP body (只针对 POST 请求解析. 注: GET 请求不会解析多余的body)
         STATE_ANALYSI_REQUEST,    // 解析获取到的整体报文,处理并发送对应的响应报文
+        STATE_NEED_CALLBACK,      // 需要回调, 用于异步处理
         STATE_FINISHED,           // 当前报文已经解析完毕
         STATE_ERROR,              // 遇到了可恢复的错误
         STATE_FATAL_ERROR         // 遇到了无法恢复的错误,即将断开连接并销毁当前实例
@@ -197,6 +222,8 @@ private:
 
     // 路由表
     std::shared_ptr<Router> router_;
+    // 数据库请求流水线
+    std::shared_ptr<DBPipeline> db_pipeline_;
 
     /** 
      * @brief 当前解析读入数据的位置
