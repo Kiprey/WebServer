@@ -34,36 +34,49 @@ bool Epoll::create(int flag)
 
 bool Epoll::add(int fd, void* data, int event)
 {
-    if(isEpollValid())
-    {
-        epoll_event ep_event;
-        ep_event.events = event;
-        ep_event.data.ptr = data;
+    if(!isEpollValid())
+        return false;
 
-        return (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) != -1);
+    epoll_event ep_event;
+    ep_event.events = event;
+    ep_event.data.ptr = data;
+
+    DEBUG_INFO("Add fd(%d) to epoll", fd);
+    if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) == -1) {
+        WARN("Add fd(%d) from epoll failed! (%s)", fd, strerror(errno));
+        return false;
     }
-    return false;
+    return true;
 }
 
 bool Epoll::modify(int fd, void* data, int event)
 {
-    if(isEpollValid())
-    {
-        epoll_event ep_event;
-        ep_event.events = event;
-        ep_event.data.ptr = data;
-        
-        return (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) != -1);
-    }
+    if(!isEpollValid())
+        return false;
 
-    return false;
+    epoll_event ep_event;
+    ep_event.events = event;
+    ep_event.data.ptr = data;
+    
+    DEBUG_INFO("Modify fd(%d) to epoll", fd);
+    if(epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) == -1) {
+        WARN("Modify fd(%d) from epoll failed! (%s)", fd, strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 bool Epoll::del(int fd)
 {
-    if(isEpollValid())
-        return (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) != -1);
-    return false;
+    if(!isEpollValid())
+        return false;
+
+    DEBUG_INFO("Delete fd(%d) to epoll", fd);
+    if(epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) == -1) {
+        WARN("Delete fd(%d) from epoll failed! (%s)", fd, strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 int Epoll::wait(int timeout)

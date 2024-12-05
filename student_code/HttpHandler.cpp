@@ -35,11 +35,9 @@ HTTP_ERROR_TYPE Router::route(const std::string& path, HttpHandler* handler) {
     return ERR_NOT_FOUND; // 如果没有找到匹配的路由，直接返回 404
 }
 
-HttpHandler::HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer>&& timer, std::shared_ptr<Router> router) 
+HttpHandler::HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer> timer, std::shared_ptr<Router> router) 
       // 初始化 client 的 fd 和 epoll event
-    : client_fd_(client_fd), client_event_{nullptr}, 
-      // 初始化 timer 的 fd 和 epoll event
-      timer_event_{nullptr}, timer_(std::move(timer)), epoll_(epoll), router_(router), curr_parse_pos_(0)
+    : client_fd_(client_fd), timer_(std::move(timer)), epoll_(epoll), router_(router), curr_parse_pos_(0)
 {
     // HTTP1.1下,默认是持续连接
     // 除非 client http headers 中带有 Connection: close
@@ -49,26 +47,12 @@ HttpHandler::HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::uniqu
 }
 
 HttpHandler::~HttpHandler() {
-    // 从 epoll 中删除该套接字相关的事件
-    /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
-    bool ret1 = epoll_->del(client_fd_);
-    bool ret2 = true;
-    // 如果不是空定时器,则释放
-    if(timer_)
-    {
-        ret2 = epoll_->del(timer_->getFd());
-        // 删除定时器
-        timer_.reset();
-    }
-    timer_event_.reset();
-    client_event_.reset();
-
-    assert(ret1 && ret2);
     // 关闭客户套接字
     DEBUG_INFO("------------------------ "
          "Connection Closed (socket: %d)"
          "------------------------",
          client_fd_);
+    timer_.reset();
     close(client_fd_);
 }
 
@@ -88,8 +72,7 @@ void HttpHandler::reset()
     // 重置 body
     http_body_.clear();
     // 重置超时时间
-    if(timer_)
-        timer_->setTime(timeoutPerRequest, 0);
+    timer_->setTime(timeoutPerRequest, 0);
 }
 
 HTTP_ERROR_TYPE HttpHandler::readRequest()
@@ -493,11 +476,5 @@ bool HttpHandler::RunEventLoopAndReEpoll()
         return false;
 
     // 执行到这里则表示需要更多数据,因此重新放入 epoll 中
-    bool ret1 = true;
-    if(timer_)
-        ret1 = epoll_->modify(timer_->getFd(), getTimerEpollEventCallback(), getTimerTriggerCond());
-    bool ret2 = epoll_->modify(client_fd_, getClientEpollEventCallback(), getClientTriggerCond());
-    assert(ret1 && ret2);
-
     return true;
 }

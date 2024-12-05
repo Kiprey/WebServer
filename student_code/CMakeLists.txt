@@ -12,15 +12,18 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -I/usr/include/postgresql")
 
 # Enable Debug flags if Debug build type
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message("Debug build type")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -ggdb3 -O0")
 endif()
 
 if (NOT ENABLE_LOG EQUAL "1")
+    message("Disabling logging")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNDEBUG")
 endif()
 
 # Enable AddressSanitizer
 if(ASAN EQUAL "1")
+    message("Enabling AddressSanitizer")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 endif()
 

@@ -15,6 +15,8 @@ public:
      * @param nsec 超时时间,单位纳秒
      */ 
     Timer(int flag = 0, time_t sec = 0, long nsec = 0);
+    Timer(Timer&) = delete;
+    Timer& operator=(Timer& other) = delete;
     ~Timer();
 
     /**

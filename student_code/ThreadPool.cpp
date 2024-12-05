@@ -29,7 +29,7 @@ ThreadPool::~ThreadPool()
     // 注意在 cond 使用之前一定要上 mutex
     {
         // 操作 task_queue_ 时一定要上锁
-        MutexLockGuard guard(threadpool_mutex_);
+        MutexLockGuard<MutexLock> guard(threadpool_mutex_);
         // 如果需要立即关闭当前的线程池,则
         if(shutdown_mode_ == IMMEDIATE_SHUTDOWN)
             // 先将当前队列清空
@@ -56,7 +56,7 @@ ThreadPool::~ThreadPool()
 bool ThreadPool::appendTask(std::function<void(void*)> function, void* arguments, int priority)
 {
     // 由于会操作事件队列,因此需要上锁
-    MutexLockGuard guard(threadpool_mutex_);
+    MutexLockGuard<MutexLock> guard(threadpool_mutex_);
     // 如果队列长度过长,则将当前task丢弃
     if(task_queue_.size() > maxQueueSize_)
         return false;
@@ -79,7 +79,7 @@ void* ThreadPool::TaskForWorkerThreads_(void* arg)
         // 首先获取事件
         {
             // 获取事件时需要上个锁
-            MutexLockGuard guard(pool->threadpool_mutex_);
+            MutexLockGuard<MutexLock> guard(pool->threadpool_mutex_);
 
             /** 
              * 如果好不容易获得到锁了,但是没有事件可以执行

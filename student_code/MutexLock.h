@@ -2,6 +2,7 @@
 #define MUTEXLOCK_H
 
 #include <pthread.h>
+#include <atomic>
 
 /**
  * @brief MutexLock 将 pthread_mutex 封装成一个类, 
@@ -19,20 +20,37 @@ public:
     pthread_mutex_t* getMutex() { return &mutex_; };
 };
 
+class MutexSpinLock {
+private:
+    std::atomic_flag flag = ATOMIC_FLAG_INIT;
+
+public:
+    void lock() {
+        while (flag.test_and_set(std::memory_order_acquire)) {
+            // 自旋等待锁释放
+        }
+    }
+
+    void unlock() {
+        flag.clear(std::memory_order_release);
+    }
+};
+
 /**
  * @brief MutexLockGuard 主要是为了自动获取锁/释放锁, 防止意外情况下忘记释放锁
  *        而且块状的锁定区域更容易让人理解代码
  */ 
+template <typename Lock>
 class MutexLockGuard
 {
 private:
-    MutexLock& lock_;
+    Lock& lock_;
 public:
     /**
      * @brief 声明 MutexLockGuard 时自动上锁
      * @param lock 待锁定的资源
      */
-    MutexLockGuard(MutexLock& mutex) : lock_(mutex) { lock_.lock(); }
+    MutexLockGuard(Lock& mutex) : lock_(mutex) { lock_.lock(); }
     /**
      * @brief 当前作用域结束时自动释放锁, 防止遗忘
      */ 

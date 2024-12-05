@@ -53,7 +53,7 @@ bool handle_potential_epoll_error(epoll_event event, int fd)
  * @param listen_fd 新连接所对应的 listen 描述符
  */ 
 void handleNewConnections(
-    std::shared_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> http_handlers, 
+    std::shared_ptr<HttpHandlerRegistry> http_handler_registry, 
     std::shared_ptr<Epoll> epoll, 
     std::shared_ptr<ThreadPool> thread_pool, 
     int listen_fd, 
@@ -105,7 +105,6 @@ void handleNewConnections(
             // 如果timer创建失败,则清空当前所有尚未 accept 的连接，因为文件描述符满
             if(!timer->isValid())
             {
-                timer.reset();
                 // 直接关闭，告诉远程这里放不下了
                 close(client_fd);
                 
@@ -114,10 +113,35 @@ void handleNewConnections(
                 break;
             }
             std::shared_ptr<HttpHandler> client_handler = std::make_shared<HttpHandler>(epoll, client_fd, std::move(timer), router);
-            // 准备两个 fd 的 EpollEvent
+            // 注册进全局的 http_handlers 中
+            http_handler_registry->addHandler(client_handler->getClientFd(), client_handler);
+
+            // 准备两个 weak_ptr
             std::weak_ptr<HttpHandler> weak_handler = client_handler;
-            std::weak_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> weak_http_handlers = http_handlers;
-            EpollEventCallback timerfd_callback = [weak_handler, weak_http_handlers](epoll_event event) mutable {
+            std::weak_ptr<HttpHandlerRegistry> weak_registry = http_handler_registry;
+
+            // 创建一个自毁装置
+            std::function<void(void)> close_callback = [epoll, weak_handler, weak_registry]() {
+                // 从 epoll 中删除该套接字相关的事件
+                /// NOTE: 注意先删除 epoll 中的条目,再来关闭 fd
+                int client_fd = -1;
+                {
+                    std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
+                    assert(shared_handler);
+                    client_fd = shared_handler->getClientFd();
+                    bool ret1 = epoll->del(client_fd);
+                    bool ret2 = epoll->del(shared_handler->getTimerFd());
+                    assert(ret1 && ret2);
+                }
+
+                // 最后抹去它的存在，调用析构函数
+                auto shared_handlers = weak_registry.lock();
+                assert (shared_handlers && client_fd > 0);
+                shared_handlers->removeHandler(client_fd);
+            };
+
+            // 准备两个 fd 的 EpollEvent
+            EpollEventCallback timerfd_callback = [weak_handler](epoll_event event) mutable {
                 std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
                 assert (shared_handler);
                 if (handle_potential_epoll_error(event, shared_handler->getTimerFd())) {
@@ -127,35 +151,43 @@ void handleNewConnections(
                         shared_handler->getClientFd(), shared_handler->getTimerFd());
                 }
                 // 无论如何，都会删除 handler 实例
-                weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+                shared_handler->destructNow();
             };
 
-            EpollEventCallback client_callback = [epoll, weak_handler, weak_http_handlers, thread_pool](epoll_event event) mutable {
+            EpollEventCallback client_callback = [epoll, weak_handler, thread_pool](epoll_event event) mutable {
                 std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
                 assert (shared_handler);
                 if (!handle_potential_epoll_error(event, shared_handler->getTimerFd())) {
-                    weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+                    shared_handler->destructNow();
                     return;
                 }
                 // 则从epoll中关闭 timer, 防止条件竞争
-                epoll->modify(shared_handler->getTimerFd(), nullptr, 0);
+                bool ret = epoll->modify(shared_handler->getTimerFd(), nullptr, 0);
+                assert (ret);
                 // 并将其放入线程池中并行执行
                 thread_pool->appendTask(
                     // lambda 函数
-                    [shared_handler, weak_http_handlers](void* arg) mutable
+                    [epoll, weak_handler](void* arg) mutable
                     {
+                        std::shared_ptr<HttpHandler> shared_handler = weak_handler.lock();
                         printConnectionStatus(shared_handler->getClientFd(), "-------->>>>> New Message");
 
                         // 如果出现无法恢复的错误,则直接释放该实例以及对应的 client_fd
-                        if (!shared_handler->RunEventLoopAndReEpoll()) {
-                            weak_http_handlers.lock()->erase(shared_handler->getClientFd());
+                        if (shared_handler->RunEventLoopAndReEpoll()) {
+                            bool ret1 = epoll->modify(shared_handler->getTimerFd(), shared_handler->getTimerEpollEventCallback(), shared_handler->getTimerTriggerCond());
+                            bool ret2 = epoll->modify(shared_handler->getClientFd(), shared_handler->getClientEpollEventCallback(), shared_handler->getClientTriggerCond());
+                            assert(ret1 && ret2);
+                        }
+                        else {
+                            shared_handler->destructNow();
                         }
                     }, 
                     nullptr,
                     TASK_PRIORITY::PARSE_HTTP_REQUEST);
             };
-            client_handler->setClientEpollEventCallback(std::make_unique<EpollEventCallback>(std::move(client_callback)));
-            client_handler->setTimerEpollEventCallback(std::make_unique<EpollEventCallback>(std::move(timerfd_callback)));
+            client_handler->setDestructor(std::move(close_callback));
+            client_handler->setClientEpollEventCallback(std::move(client_callback));
+            client_handler->setTimerEpollEventCallback(std::move(timerfd_callback));
 
             /**
              * @brief EPOLLRDHUP EPOLLHUP 不同点,前者是半关闭连接时出发,后者是完全关闭后触发
@@ -168,7 +200,6 @@ void handleNewConnections(
             assert(ret1 && ret2);
             // 输出相关信息
             printConnectionStatus(client_fd, "-------->>>>> New Connection");
-            (*http_handlers)[client_handler->getClientFd()] = std::move(client_handler);
         }
     }
 }
@@ -410,15 +441,12 @@ int main(int argc, char* argv[])
     std::shared_ptr<Epoll> epoll = std::make_shared<Epoll>(EPOLL_CLOEXEC);
     assert(epoll->isEpollValid());
     
-    std::shared_ptr<std::unordered_map<int, std::shared_ptr<HttpHandler>>> http_handlers = \
-        std::make_shared<std::unordered_map<int, std::shared_ptr<HttpHandler>>>();
+    std::shared_ptr<HttpHandlerRegistry> http_handler_registry = std::make_shared<HttpHandlerRegistry>();
 
-    std::unique_ptr<EpollEventCallback> listen_epollevent = std::make_unique<EpollEventCallback>(
-        [epoll, thread_pool, http_handlers, listen_fd, &idle_fd, router](epoll_event event) {
-            // 在 lambda 中调用 handleNewConnections
-            handleNewConnections(http_handlers, epoll, thread_pool, listen_fd, &idle_fd, router);
-        }
-    );
+    EpollEventCallback listen_epollevent = [epoll, thread_pool, http_handler_registry, listen_fd, &idle_fd, router](epoll_event event) {
+        // 在 lambda 中调用 handleNewConnections
+        handleNewConnections(http_handler_registry, epoll, thread_pool, listen_fd, &idle_fd, router);
+    };
     // 将 listen_fd 添加进 epoll 实例
     epoll->add(listen_fd, &listen_epollevent, EPOLLET | EPOLLIN);
 
@@ -448,11 +476,11 @@ int main(int argc, char* argv[])
         {
             // 获取事件相关的信息
             epoll_event&& event = epoll->getEvent(static_cast<size_t>(i));
-            std::unique_ptr<EpollEventCallback>* curr_epoll_event_callback = static_cast<std::unique_ptr<EpollEventCallback>*>(event.data.ptr);
-            (**curr_epoll_event_callback)(event);
+            EpollEventCallback* curr_epoll_event_callback = static_cast<EpollEventCallback*>(event.data.ptr);
+            (*curr_epoll_event_callback)(event);
         }
     }
-    listen_epollevent.reset();
+    epoll->del(listen_fd);
 
     return 0;
 }

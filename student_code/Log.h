@@ -14,10 +14,10 @@
 #define cLBL "\x1b[1;94m"   // 终端蓝色字体代码
 
 // 全局日志输出锁
-extern MutexLock global_log_lock;
+extern MutexSpinLock global_log_lock;
 
 #define INFO(x...) do { \
-    MutexLockGuard log_guard(global_log_lock);    \
+    MutexLockGuard<MutexSpinLock> log_guard(global_log_lock);    \
     fprintf(stdout, "(Thread %lx): ", syscall(SYS_gettid));  \
     fprintf(stdout, cLBL "[*] " cRST x); \
     fprintf(stdout, cRST "\n"); \
@@ -25,7 +25,7 @@ extern MutexLock global_log_lock;
   } while (0)
 
 #define WARN(x...) do { \
-    MutexLockGuard log_guard(global_log_lock);    \
+    MutexLockGuard<MutexSpinLock> log_guard(global_log_lock);    \
     fprintf(stderr, "(Thread %lx): ", syscall(SYS_gettid));  \
     fprintf(stderr, cYEL "[!] " cBRI "WARNING: " cRST x); \
     fprintf(stderr, cRST "\n");    \
@@ -33,7 +33,7 @@ extern MutexLock global_log_lock;
   } while (0)
 
 #define ERROR(x...) do { \
-    MutexLockGuard log_guard(global_log_lock);    \
+    MutexLockGuard<MutexSpinLock> log_guard(global_log_lock);    \
     fprintf(stderr, "(Thread %lx): ", syscall(SYS_gettid));  \
     fprintf(stderr, cLRD "[-] " cRST x); \
     fprintf(stderr, cRST "\n"); \
@@ -41,7 +41,7 @@ extern MutexLock global_log_lock;
   } while (0)
 
 #define FATAL(x...) do { \
-    MutexLockGuard log_guard(global_log_lock);    \
+    MutexLockGuard<MutexSpinLock> log_guard(global_log_lock);    \
     fprintf(stderr, "(Thread %lx): ", syscall(SYS_gettid));  \
     fprintf(stderr, cRST cLRD "[-] PROGRAM ABORT : " cBRI x); \
     fprintf(stderr, cLRD "\n         Location : " cRST "%s(), %s:%u\n\n", \

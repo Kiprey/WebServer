@@ -7,6 +7,7 @@
 
 #include "Epoll.h"
 #include "Timer.h"
+#include "MutexLock.h"
 
 // HttpHandler内部错误 
 enum HTTP_ERROR_TYPE {
@@ -57,7 +58,7 @@ public:
      * @param   timer       给当前连接限制时间的timer
      * @param   router     路由表
      */
-    explicit HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer>&& timer, std::shared_ptr<Router> router);
+    explicit HttpHandler(std::shared_ptr<Epoll> epoll, int client_fd, std::unique_ptr<Timer> timer, std::shared_ptr<Router> router);
 
     /**
      * @brief   释放所有 HttpHandler 所使用的资源
@@ -76,30 +77,17 @@ public:
 
     // 只有getFd,没有setFd,因为Fd必须在创造该实例时被设置
     int getClientFd()           { return client_fd_; }
-    int getTimerFd()           { 
-        assert(timer_); 
-        return timer_->getFd(); 
-    }
+    int getTimerFd()           { return timer_->getFd(); }
     // 获取 client_fd 和 timer_fd 所需要设置的 epoll 触发条件
     constexpr int getClientTriggerCond() { return EPOLLET | EPOLLIN | EPOLLONESHOT | EPOLLRDHUP | EPOLLHUP; }
     constexpr int getTimerTriggerCond()  { return EPOLLET | EPOLLIN | EPOLLONESHOT; }
+    void setDestructor(std::function<void(void)>&& callback) { destructor_ = callback; }
+    void destructNow() { if (destructor_) destructor_(); }
     // 获取 client 和 timer 的 epoll event
-    void setClientEpollEventCallback(std::unique_ptr<EpollEventCallback>&& cb) { 
-        assert(!client_event_);
-        client_event_ = std::move(cb); 
-    }
-    void setTimerEpollEventCallback(std::unique_ptr<EpollEventCallback>&& cb) { 
-        assert(!timer_event_);
-        timer_event_ = std::move(cb); 
-    }
-    std::unique_ptr<EpollEventCallback>* const getClientEpollEventCallback() { 
-        assert(client_event_);
-        return &client_event_; 
-    }
-    std::unique_ptr<EpollEventCallback>* const getTimerEpollEventCallback()  { 
-        assert(timer_event_);
-        return &timer_event_; 
-    }
+    void setClientEpollEventCallback(EpollEventCallback&& cb) { client_event_ = std::move(cb); }
+    void setTimerEpollEventCallback(EpollEventCallback&& cb) { timer_event_ = std::move(cb); }
+    EpollEventCallback* const getClientEpollEventCallback() { return &client_event_; }
+    EpollEventCallback* const getTimerEpollEventCallback()  { return &timer_event_; }
 
     // 设置HTTP处理时, www文件夹的路径
     static void setWWWPath(string path) { www_path = path; };
@@ -175,14 +163,15 @@ private:
     const int maxAgainTimes = 10;       // 最多重试次数
     const int timeoutPerRequest = 10;   // 单个请求的超时时间(s)
 
+    // 自毁函数
+    std::function<void(void)> destructor_;
+
     // 相关描述符
     int client_fd_;
-    // 注意！！！：该 Callback 会持有 epoll, handler(this), thread_pool 的引用
-    std::unique_ptr<EpollEventCallback> client_event_;
+    EpollEventCallback client_event_;
 
     std::unique_ptr<Timer> timer_;
-    // 注意！！！：该 Callback 会持有 handler(this) 的引用
-    std::unique_ptr<EpollEventCallback> timer_event_;
+    EpollEventCallback timer_event_;
 
     std::shared_ptr<Epoll> epoll_;
 
@@ -312,6 +301,23 @@ public:
     {
         static MimeType _mimeTy;
         return _mimeTy.getMineType_(suffix);
+    }
+};
+
+
+class HttpHandlerRegistry {
+private:
+    std::unordered_map<int, std::shared_ptr<HttpHandler>> _http_handlers;
+    MutexSpinLock _lock;
+public:
+    void addHandler(int fd, std::shared_ptr<HttpHandler> handler) {
+        MutexLockGuard<MutexSpinLock> guard(_lock);
+        _http_handlers.insert({handler->getClientFd(), handler});
+    }
+
+    void removeHandler(int fd) {
+        MutexLockGuard<MutexSpinLock> guard(_lock);
+        _http_handlers.erase(fd);
     }
 };
 
