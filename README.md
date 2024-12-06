@@ -130,8 +130,3 @@ docker-compose up
   echo '{"userid": 1, "data": "exp:100;gold:100"}' > /tmp/data2.json
   ab -c 64 -n 1000 -p /tmp/data2.json -T "application/json" http://localhost:8888/api/upload
   ```
-
-## TODO
-
-- 存在一个请求一直返回出错的情况
-- 需要考虑到 callback 的指针可能失效的情况

@@ -227,8 +227,6 @@ HTTP_ERROR_TYPE POST_api_bind(HttpHandler* handler)
         return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
 
     // query
-    // 注意：这里会存在 SQL 注入漏洞
-    // 之所以用字符串拼接最主要的原因是 libpqxx 里 pipeline 和 prepared statement 不能同时使用
     const string query = 
         "WITH ins AS ("
         "    INSERT INTO user_info (deviceid) "
@@ -291,8 +289,6 @@ HTTP_ERROR_TYPE POST_api_upload(HttpHandler* handler)
         return handler->sendResponse("200", "OK", "application/json", R"({"code": 104})");
 
     // NOTE: 注意这里没有校验用户是否已经存在，因为 PDF 里没写
-    // 注意：这里会存在 SQL 注入漏洞
-    // 之所以用字符串拼接最主要的原因是 libpqxx 里 pipeline 和 prepared statement 不能同时使用
     const string query = "INSERT INTO user_data (userid, data) VALUES (\'" + 
             handler->escapeDBString(std::to_string(userid)) + "\', \'" + 
             handler->escapeDBString(data) + "\')"

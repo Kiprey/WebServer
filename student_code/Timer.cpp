@@ -34,7 +34,8 @@ bool Timer::isValid()
 bool Timer::create(int flag)
 {
     // 这里使用 CLOCK_BOOTTIME **相对时间**, 排除了系统时间与系统休眠时间的干扰
-    if(!isValid() && ((timer_fd_ = timerfd_create(CLOCK_BOOTTIME, flag)) == -1))
+    // 但是处于兼容性考虑，选用 CLOCK_MONOTONIC
+    if(!isValid() && ((timer_fd_ = timerfd_create(CLOCK_MONOTONIC, flag)) == -1))
         return false;
     return true;
 }
